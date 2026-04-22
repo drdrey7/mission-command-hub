@@ -5,6 +5,7 @@ import { SystemStatusPanel } from "@/components/mission/SystemStatusPanel";
 import { RecentActivityPanel } from "@/components/mission/RecentActivityPanel";
 import { OperationalTabs } from "@/components/mission/OperationalTabs";
 import { CommandFooter } from "@/components/mission/CommandFooter";
+import { AgentChat } from "@/components/mission/AgentChat";
 import { agents } from "@/data/mockData";
 
 const Index = () => {
@@ -49,6 +50,7 @@ const Index = () => {
 
         <CommandFooter />
       </div>
+      <AgentChat />
     </main>
   );
 };
