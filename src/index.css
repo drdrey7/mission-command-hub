@@ -218,3 +218,17 @@
 .scanline {
   animation: scanline 3s linear infinite;
 }
+
+@keyframes orbit {
+  from { transform: rotate(0deg) translateX(var(--orbit-r, 28px)) rotate(0deg); }
+  to   { transform: rotate(360deg) translateX(var(--orbit-r, 28px)) rotate(-360deg); }
+}
+.orbit {
+  animation: orbit 4s linear infinite;
+}
+
+@keyframes float-y {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+.float-y { animation: float-y 2.4s ease-in-out infinite; }
