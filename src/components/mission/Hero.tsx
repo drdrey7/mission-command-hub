@@ -1,5 +1,6 @@
 import { Plane, Radio } from "lucide-react";
 import { StatusBadge } from "./StatusBadge";
+import { ThemeToggle } from "@/components/theme/ThemeToggle";
 
 export const Hero = () => {
   return (
@@ -18,12 +19,15 @@ export const Hero = () => {
       />
 
       <div className="relative">
-        <div className="flex flex-wrap items-center gap-3">
-          <StatusBadge status="online" label="Sistemas Operacionais" />
-          <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-surface-1/80 px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            <Radio className="h-3 w-3" />
-            Openclaw VPS · Hangar 01
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <StatusBadge status="online" label="Sistemas Operacionais" />
+            <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-surface-1/80 px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <Radio className="h-3 w-3" />
+              Openclaw VPS · Hangar 01
+            </div>
           </div>
+          <ThemeToggle />
         </div>
 
         <h1 className="mt-6 font-display text-5xl font-bold tracking-tight sm:text-6xl lg:text-7xl">

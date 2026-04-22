@@ -3,10 +3,13 @@ import { AgentCard } from "@/components/mission/AgentCard";
 import { ActiveTasksPanel } from "@/components/mission/ActiveTasksPanel";
 import { SystemStatusPanel } from "@/components/mission/SystemStatusPanel";
 import { RecentActivityPanel } from "@/components/mission/RecentActivityPanel";
+import { OperationalTabs } from "@/components/mission/OperationalTabs";
 import { CommandFooter } from "@/components/mission/CommandFooter";
 import { agents } from "@/data/mockData";
 
 const Index = () => {
+  const activeCount = agents.filter((a) => a.status === "active" || a.status === "working").length;
+
   return (
     <main className="min-h-screen bg-background">
       <div className="mx-auto max-w-[1400px] space-y-6 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
@@ -23,7 +26,9 @@ const Index = () => {
                 Esquadrão em formação
               </p>
             </div>
-            <span className="font-mono text-xs text-muted-foreground">04 / 04 ativos</span>
+            <span className="font-mono text-xs text-muted-foreground">
+              {String(activeCount).padStart(2, "0")} / {String(agents.length).padStart(2, "0")} ativos
+            </span>
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {agents.map((a) => (
@@ -38,6 +43,9 @@ const Index = () => {
           <SystemStatusPanel />
           <RecentActivityPanel />
         </section>
+
+        {/* Memory / VPS / Missions */}
+        <OperationalTabs />
 
         <CommandFooter />
       </div>
