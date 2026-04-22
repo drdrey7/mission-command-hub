@@ -57,6 +57,26 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        agent: {
+          comandante: "hsl(var(--agent-comandante))",
+          cyber: "hsl(var(--agent-cyber))",
+          flow: "hsl(var(--agent-flow))",
+          ledger: "hsl(var(--agent-ledger))",
+        },
+        status: {
+          online: "hsl(var(--status-online))",
+          warning: "hsl(var(--status-warning))",
+          offline: "hsl(var(--status-offline))",
+        },
+        surface: {
+          1: "hsl(var(--surface-1))",
+          2: "hsl(var(--surface-2))",
+          3: "hsl(var(--surface-3))",
+        },
+      },
+      fontFamily: {
+        display: ["'Space Grotesk'", "system-ui", "sans-serif"],
+        mono: ["'JetBrains Mono'", "ui-monospace", "monospace"],
       },
       borderRadius: {
         lg: "var(--radius)",
