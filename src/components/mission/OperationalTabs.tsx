@@ -1,19 +1,19 @@
 import { useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Brain, Server, Target, Cpu, HardDrive, MemoryStick, Plane, Trophy, FileText } from "lucide-react";
+import { Brain, Server, Target, Cpu, HardDrive, MemoryStick, Plane, Trophy, FileText, Shield, ClipboardList } from "lucide-react";
 import { memoryEntries, AgentKey, Mission, VpsNode } from "@/data/mockData";
 import { AgentBadge } from "./AgentBadge";
 import { MissionBuilder } from "./MissionBuilder";
 import { AuditTrail } from "./AuditTrail";
 import { VpsActions } from "./VpsActions";
+import { Fail2banPanel } from "./Fail2banPanel";
+import { TasksTab } from "./TasksTab";
 import { getMissions, getVpsNodes } from "@/services/api";
 import { cn } from "@/lib/utils";
 
 const agentColor: Record<AgentKey, string> = {
-  comandante: "text-agent-comandante",
-  cyber: "text-agent-cyber",
-  flow: "text-agent-flow",
-  ledger: "text-agent-ledger",
+  comandante: "text-agent-comandante", cyber: "text-agent-cyber",
+  flow: "text-agent-flow", ledger: "text-agent-ledger",
 };
 
 const missionStatus: Record<string, { label: string; cls: string }> = {
@@ -32,7 +32,12 @@ const Bar = ({ value, tone = "accent" }: { value: number; tone?: "accent" | "war
   );
 };
 
-export const OperationalTabs = () => {
+interface Props {
+  value: string;
+  onValueChange: (v: string) => void;
+}
+
+export const OperationalTabs = ({ value, onValueChange }: Props) => {
   const [missions, setMissions] = useState<Mission[]>([]);
   const [nodes, setNodes] = useState<VpsNode[]>([]);
 
@@ -42,24 +47,15 @@ export const OperationalTabs = () => {
   }, []);
 
   return (
-    <section className="panel p-5 sm:p-6">
-      <div className="mb-5 flex items-center justify-between">
-        <div>
-          <h2 className="font-display text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">
-            Briefing Operacional
-          </h2>
-          <p className="mt-1 font-display text-2xl font-bold text-foreground">
-            Memória, infraestrutura e missões
-          </p>
-        </div>
-      </div>
-
-      <Tabs defaultValue="missions" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 bg-surface-2/60 sm:w-auto sm:inline-flex sm:grid-cols-4">
-          <TabsTrigger value="missions" className="gap-2"><Target className="h-4 w-4" /><span>Missões</span></TabsTrigger>
-          <TabsTrigger value="memory" className="gap-2"><Brain className="h-4 w-4" /><span>Memória</span></TabsTrigger>
-          <TabsTrigger value="vps" className="gap-2"><Server className="h-4 w-4" /><span>VPS</span></TabsTrigger>
-          <TabsTrigger value="audit" className="gap-2"><FileText className="h-4 w-4" /><span>Audit</span></TabsTrigger>
+    <section className="panel p-4 sm:p-5">
+      <Tabs value={value} onValueChange={onValueChange} className="w-full">
+        <TabsList className="grid w-full grid-cols-3 bg-surface-2/60 sm:w-auto sm:inline-flex sm:grid-cols-6">
+          <TabsTrigger value="missions" className="gap-1.5 text-xs"><Target className="h-3.5 w-3.5" />Missões</TabsTrigger>
+          <TabsTrigger value="tasks" className="gap-1.5 text-xs"><ClipboardList className="h-3.5 w-3.5" />Tarefas</TabsTrigger>
+          <TabsTrigger value="vps" className="gap-1.5 text-xs"><Server className="h-3.5 w-3.5" />VPS</TabsTrigger>
+          <TabsTrigger value="fail2ban" className="gap-1.5 text-xs"><Shield className="h-3.5 w-3.5" />Fail2ban</TabsTrigger>
+          <TabsTrigger value="memory" className="gap-1.5 text-xs"><Brain className="h-3.5 w-3.5" />Memória</TabsTrigger>
+          <TabsTrigger value="audit" className="gap-1.5 text-xs"><FileText className="h-3.5 w-3.5" />Audit</TabsTrigger>
         </TabsList>
 
         {/* MISSIONS */}
@@ -87,7 +83,7 @@ export const OperationalTabs = () => {
                     </div>
                     <div className="text-right">
                       <p className="text-[10px] uppercase tracking-wider text-muted-foreground">ETA</p>
-                      <p className="font-mono text-sm font-bold text-foreground">{m.eta}</p>
+                      <p className="font-mono text-sm font-bold text-foreground tabular-nums">{m.eta}</p>
                     </div>
                   </div>
                   <div className="mt-4 flex items-center gap-3">
@@ -104,7 +100,7 @@ export const OperationalTabs = () => {
                           {m.status === "concluido" ? <Trophy className="h-3 w-3 text-status-online" /> : <Plane className="h-3 w-3" />}
                           progresso
                         </span>
-                        <span className="font-mono text-foreground">{m.progress}%</span>
+                        <span className="font-mono text-foreground tabular-nums">{m.progress}%</span>
                       </div>
                       <Bar value={m.progress} />
                     </div>
@@ -115,25 +111,8 @@ export const OperationalTabs = () => {
           </div>
         </TabsContent>
 
-        {/* MEMORY */}
-        <TabsContent value="memory" className="mt-5">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            {memoryEntries.map((m) => (
-              <div key={m.id} className="flex items-start gap-3 rounded-xl border border-border/50 bg-surface-2/40 p-4 transition-smooth hover:border-border">
-                <AgentBadge agent={m.agent} size="sm" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className={cn("font-mono text-xs uppercase tracking-wider", agentColor[m.agent])}>
-                      {m.agent} · {m.key}
-                    </p>
-                    <span className="font-mono text-[10px] text-muted-foreground">{m.updated}</span>
-                  </div>
-                  <p className="mt-1 text-sm text-foreground">{m.value}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </TabsContent>
+        {/* TASKS */}
+        <TabsContent value="tasks" className="mt-5"><TasksTab /></TabsContent>
 
         {/* VPS */}
         <TabsContent value="vps" className="mt-5">
@@ -153,9 +132,7 @@ export const OperationalTabs = () => {
                         n.status === "online" && "border-status-online/40 bg-status-online/10 text-status-online",
                         n.status === "warning" && "border-status-warning/40 bg-status-warning/10 text-status-warning",
                         n.status === "offline" && "border-status-offline/40 bg-status-offline/10 text-status-offline"
-                      )}>
-                        {n.status}
-                      </span>
+                      )}>{n.status}</span>
                       <VpsActions nodeId={n.id} nodeName={n.name} />
                     </div>
                   </div>
@@ -166,7 +143,7 @@ export const OperationalTabs = () => {
                   </div>
                   <div className="mt-4 flex items-center justify-between border-t border-border/60 pt-3 text-xs">
                     <span className="text-muted-foreground">Uptime</span>
-                    <span className="font-mono text-foreground">{n.uptime}</span>
+                    <span className="font-mono text-foreground tabular-nums">{n.uptime}</span>
                   </div>
                 </div>
               );
@@ -174,10 +151,29 @@ export const OperationalTabs = () => {
           </div>
         </TabsContent>
 
-        {/* AUDIT */}
-        <TabsContent value="audit" className="mt-5">
-          <AuditTrail />
+        {/* FAIL2BAN */}
+        <TabsContent value="fail2ban" className="mt-5"><Fail2banPanel /></TabsContent>
+
+        {/* MEMORY */}
+        <TabsContent value="memory" className="mt-5">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {memoryEntries.map((m) => (
+              <div key={m.id} className="flex items-start gap-3 rounded-xl border border-border/50 bg-surface-2/40 p-4 transition-smooth hover:border-border">
+                <AgentBadge agent={m.agent} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className={cn("font-mono text-xs uppercase tracking-wider", agentColor[m.agent])}>{m.agent} · {m.key}</p>
+                    <span className="font-mono text-[10px] text-muted-foreground">{m.updated}</span>
+                  </div>
+                  <p className="mt-1 text-sm text-foreground">{m.value}</p>
+                </div>
+              </div>
+            ))}
+          </div>
         </TabsContent>
+
+        {/* AUDIT */}
+        <TabsContent value="audit" className="mt-5"><AuditTrail /></TabsContent>
       </Tabs>
     </section>
   );
@@ -186,10 +182,8 @@ export const OperationalTabs = () => {
 const Metric = ({ icon: Icon, label, value, tone }: { icon: typeof Cpu; label: string; value: number; tone: "accent" | "warning" | "offline" }) => (
   <div>
     <div className="mb-1 flex items-center justify-between text-xs">
-      <span className="flex items-center gap-1.5 text-muted-foreground">
-        <Icon className="h-3 w-3" /> {label}
-      </span>
-      <span className="font-mono text-foreground">{value}%</span>
+      <span className="flex items-center gap-1.5 text-muted-foreground"><Icon className="h-3 w-3" /> {label}</span>
+      <span className="font-mono text-foreground tabular-nums">{value}%</span>
     </div>
     <Bar value={value} tone={tone} />
   </div>
