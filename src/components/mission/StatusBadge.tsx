@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 
 interface StatusBadgeProps {
-  status: "online" | "warning" | "offline" | "active" | "standby" | "idle";
+  status: "online" | "warning" | "offline" | "active" | "standby" | "idle" | "working";
   label?: string;
   className?: string;
 }
@@ -9,6 +9,7 @@ interface StatusBadgeProps {
 const statusMap = {
   online: { color: "bg-status-online", text: "text-status-online", label: "Online" },
   active: { color: "bg-status-online", text: "text-status-online", label: "Em Operação" },
+  working: { color: "bg-agent-cyber", text: "text-agent-cyber", label: "Em Voo" },
   warning: { color: "bg-status-warning", text: "text-status-warning", label: "Atenção" },
   standby: { color: "bg-status-warning", text: "text-status-warning", label: "Aguardando" },
   offline: { color: "bg-status-offline", text: "text-status-offline", label: "Offline" },
