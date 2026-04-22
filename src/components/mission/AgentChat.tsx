@@ -9,9 +9,26 @@ import { agents, AgentKey } from "@/data/mockData";
 import { sendChat, ChatMessage } from "@/services/api";
 import { cn } from "@/lib/utils";
 
-export const AgentChat = () => {
-  const [open, setOpen] = useState(false);
+interface AgentChatProps {
+  externalAgent?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}
+
+export const AgentChat = ({ externalAgent, open: openProp, onOpenChange }: AgentChatProps = {}) => {
+  const [openState, setOpenState] = useState(false);
+  const open = openProp ?? openState;
+  const setOpen = (v: boolean) => {
+    setOpenState(v);
+    onOpenChange?.(v);
+  };
   const [active, setActive] = useState<AgentKey>("comandante");
+
+  useEffect(() => {
+    if (externalAgent && (["comandante", "cyber", "flow", "ledger"] as const).includes(externalAgent as AgentKey)) {
+      setActive(externalAgent as AgentKey);
+    }
+  }, [externalAgent]);
   const [byAgent, setByAgent] = useState<Record<AgentKey, ChatMessage[]>>({
     comandante: [], cyber: [], flow: [], ledger: [],
   });
