@@ -1,6 +1,8 @@
 import { Plane, Radio } from "lucide-react";
 import { StatusBadge } from "./StatusBadge";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
+import { NotificationsBell } from "./NotificationsBell";
+import { KillSwitch } from "./KillSwitch";
 
 export const Hero = () => {
   return (
@@ -27,7 +29,11 @@ export const Hero = () => {
               Openclaw VPS · Hangar 01
             </div>
           </div>
-          <ThemeToggle />
+          <div className="flex items-center gap-2">
+            <KillSwitch />
+            <NotificationsBell />
+            <ThemeToggle />
+          </div>
         </div>
 
         <h1 className="mt-6 font-display text-5xl font-bold tracking-tight sm:text-6xl lg:text-7xl">
