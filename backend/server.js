@@ -32,6 +32,7 @@ const TASK_AGENT_ID_COMMENT_RE = /<!--\s*mc-agent-id:\s*([^>]+?)\s*-->/i;
 const TASK_SESSION_KEY_COMMENT_RE = /<!--\s*mc-session-key:\s*([^>]+?)\s*-->/i;
 const TASK_RUN_ID_COMMENT_RE = /<!--\s*mc-run-id:\s*([^>]+?)\s*-->/i;
 const TASK_STATUS_COMMENT_RE = /<!--\s*mc-dispatch-status:\s*([^>]+?)\s*-->/i;
+const TASK_CONCLUSION_COMMENT_RE = /<!--\s*mc-conclusion:\s*([^>]+?)\s*-->/i;
 const TASK_COMMENT_RE = /<!--\s*mc-[a-z-]+:\s*[^>]+?\s*-->/gi;
 const TASK_SECTION_META = {
   standby: { label: 'Standby' },
@@ -107,6 +108,7 @@ function parseTaskComments(text) {
     sessionKey: null,
     runId: null,
     dispatchStatus: null,
+    conclusion: null,
   };
 
   const raw = String(text || '');
@@ -115,12 +117,14 @@ function parseTaskComments(text) {
   const sessionKey = raw.match(TASK_SESSION_KEY_COMMENT_RE)?.[1]?.trim();
   const runId = raw.match(TASK_RUN_ID_COMMENT_RE)?.[1]?.trim();
   const dispatchStatus = raw.match(TASK_STATUS_COMMENT_RE)?.[1]?.trim();
+  const conclusion = raw.match(TASK_CONCLUSION_COMMENT_RE)?.[1]?.trim();
 
   if (taskId) parsed.taskId = taskId;
   if (agentId) parsed.agentId = agentId;
   if (sessionKey) parsed.sessionKey = sessionKey;
   if (runId) parsed.runId = runId;
   if (dispatchStatus) parsed.dispatchStatus = dispatchStatus;
+  if (conclusion) parsed.conclusion = conclusion;
   return parsed;
 }
 
@@ -131,6 +135,10 @@ function buildTaskComments(task) {
   if (task.sessionKey) comments.push(`<!-- mc-session-key: ${task.sessionKey} -->`);
   if (task.runId) comments.push(`<!-- mc-run-id: ${task.runId} -->`);
   if (task.dispatchStatus) comments.push(`<!-- mc-dispatch-status: ${task.dispatchStatus} -->`);
+  if (task.conclusion) {
+    const conclusion = String(task.conclusion).replace(/\s+/g, ' ').trim();
+    if (conclusion) comments.push(`<!-- mc-conclusion: ${conclusion} -->`);
+  }
   return comments.length ? ` ${comments.join(' ')}` : '';
 }
 
@@ -163,6 +171,7 @@ function parseTaskLine(line, sectionKey, index) {
     sessionKey: meta.sessionKey,
     runId: meta.runId,
     dispatchStatus: meta.dispatchStatus,
+    conclusion: meta.conclusion,
   };
 }
 
@@ -343,6 +352,12 @@ function synchronizeTasksDocument(document) {
         changed = true;
       }
 
+      const conclusion = resolveTaskConclusion(task);
+      if (conclusion && conclusion !== task.conclusion) {
+        task.conclusion = conclusion;
+        changed = true;
+      }
+
       if (task.section !== block.canonicalSection) {
         task.section = block.canonicalSection;
         changed = true;
@@ -356,10 +371,14 @@ function synchronizeTasksDocument(document) {
         continue;
       }
 
-      if (isTaskCompleted(task)) {
+      if (conclusion || isTaskCompleted(task)) {
         block.entries.splice(index, 1);
         task.section = 'completed';
         task.checked = true;
+        task.dispatchStatus = 'completed';
+        if (!task.conclusion && conclusion) {
+          task.conclusion = conclusion;
+        }
         completedMoves.push(task);
         changed = true;
       }
@@ -405,7 +424,90 @@ function updateTaskEntryMetadata(task, patch = {}) {
   if (patch.sessionKey !== undefined) task.sessionKey = patch.sessionKey;
   if (patch.runId !== undefined) task.runId = patch.runId;
   if (patch.dispatchStatus !== undefined) task.dispatchStatus = patch.dispatchStatus;
+  if (patch.conclusion !== undefined) task.conclusion = patch.conclusion;
   return task;
+}
+
+function readJsonFileSafe(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function findSessionRecordByKey(sessionKey) {
+  if (!sessionKey) return null;
+  const agentsRoot = '/root/.openclaw/agents';
+  if (!fs.existsSync(agentsRoot)) return null;
+
+  for (const agentId of fs.readdirSync(agentsRoot)) {
+    const storePath = path.join(agentsRoot, agentId, 'sessions', 'sessions.json');
+    const store = readJsonFileSafe(storePath);
+    if (!store || typeof store !== 'object') continue;
+
+    const record = store[sessionKey];
+    if (!record || typeof record !== 'object') continue;
+
+    return {
+      agentId,
+      storePath,
+      ...record,
+    };
+  }
+
+  return null;
+}
+
+function extractFinalAssistantText(sessionFilePath) {
+  if (!sessionFilePath || !fs.existsSync(sessionFilePath)) return null;
+
+  const lines = fs.readFileSync(sessionFilePath, 'utf8').split(/\r?\n/);
+  let finalText = null;
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (entry?.type !== 'message' || entry?.message?.role !== 'assistant') continue;
+    const content = Array.isArray(entry.message.content) ? entry.message.content : [];
+    const textParts = content
+      .filter((part) => part && part.type === 'text' && typeof part.text === 'string' && part.text.trim())
+      .map((part) => part.text.trim());
+
+    if (!textParts.length) continue;
+    finalText = textParts.join('\n\n');
+  }
+
+  return finalText ? finalText.trim() : null;
+}
+
+function resolveTaskConclusion(task) {
+  if (!task?.sessionKey) return null;
+  const sessionRecord = findSessionRecordByKey(task.sessionKey);
+  if (!sessionRecord) return null;
+
+  const sessionStatus = String(sessionRecord.status || '').trim().toLowerCase();
+  if (sessionStatus && sessionStatus !== 'done') return null;
+
+  const candidateSessionFiles = [
+    sessionRecord.sessionFile,
+    sessionRecord.sessionPath,
+    sessionRecord.filePath,
+    sessionRecord.sessionId && sessionRecord.storePath
+      ? path.join(path.dirname(sessionRecord.storePath), `${sessionRecord.sessionId}.jsonl`)
+      : null,
+  ].filter((candidate) => typeof candidate === 'string' && candidate.trim());
+
+  const sessionFilePath = candidateSessionFiles.find((candidate) => fs.existsSync(candidate)) || null;
+
+  return extractFinalAssistantText(sessionFilePath);
 }
 
 function upsertTaskMetadata(document, taskId, patch) {

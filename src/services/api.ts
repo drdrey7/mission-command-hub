@@ -50,6 +50,7 @@ export interface TaskItem {
   sessionKey?: string | null;
   runId?: string | null;
   dispatchStatus?: string | null;
+  conclusion?: string | null;
 }
 
 export interface TasksSummary {

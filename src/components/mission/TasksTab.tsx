@@ -475,6 +475,11 @@ export const TasksTab = () => {
                                 )}
                               </div>
                             )}
+                            {!isEditing && task.conclusion && task.section === "completed" && (
+                              <p className="mt-2 rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-xs text-foreground">
+                                {task.conclusion}
+                              </p>
+                            )}
                           </div>
 
                           <div className="flex shrink-0 items-center gap-1">
