@@ -312,25 +312,27 @@ app.get('/api/activity', (req, res) => {
 
 app.get('/api/agents', async (req, res) => {
   try {
-    const agentsPath = '/root/.openclaw/agents';
-    const agentDirs = fs.readdirSync(agentsPath).filter(dir => fs.statSync(path.join(agentsPath, dir)).isDirectory());
+    const configPath = '/root/.openclaw/openclaw.json';
+    if (!fs.existsSync(configPath)) {
+      return res.status(500).json({ error: 'OpenClaw config not found' });
+    }
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const agentIds = (config.agents?.list || []).map(a => a.id).filter(Boolean);
     const agents = [];
-    for (const agent of agentDirs) {
-      const sessionsPath = path.join(agentsPath, agent, 'sessions');
+    for (const id of agentIds) {
+      const sessionsPath = `/root/.openclaw/agents/${id}/sessions`;
       let lastActivity = null;
       let sessionCount = 0;
       if (fs.existsSync(sessionsPath)) {
-        const files = fs.readdirSync(sessionsPath);
-        sessionCount = files.length;
-        // Find most recent session by filename timestamp or file mtime
+        const allFiles = fs.readdirSync(sessionsPath);
+        const jsonlFiles = allFiles.filter(file => file.endsWith('.jsonl') && !file.includes('.deleted'));
+        sessionCount = jsonlFiles.length;
         let latestTime = 0;
-        for (const file of files) {
-          if (file.endsWith('.jsonl') && !file.includes('.deleted')) {
-            const filePath = path.join(sessionsPath, file);
-            const stat = fs.statSync(filePath);
-            if (stat.mtimeMs > latestTime) {
-              latestTime = stat.mtimeMs;
-            }
+        for (const file of jsonlFiles) {
+          const filePath = path.join(sessionsPath, file);
+          const stat = fs.statSync(filePath);
+          if (stat.mtimeMs > latestTime) {
+            latestTime = stat.mtimeMs;
           }
         }
         if (latestTime > 0) {
@@ -338,13 +340,15 @@ app.get('/api/agents', async (req, res) => {
         }
       }
       agents.push({
-        name: agent,
+        id,
+        name: id,
         sessionCount,
         lastActivity: lastActivity || null
       });
     }
     res.json({ agents });
   } catch (e) {
+    console.error('Error in /api/agents:', e);
     res.status(500).json({ error: e.message });
   }
 });
