@@ -12,8 +12,9 @@ const tone: Record<Agent["key"], { color: string; glow: string; bg: string }> = 
 
 export const AgentCard = ({ agent }: { agent: Agent }) => {
   const cfg = tone[agent.key];
+  const isActive = agent.status === "active" || agent.status === "working";
   const isWorking = agent.status === "working";
-  const isLit = isWorking || agent.status === "active";
+  const isLit = isActive;
 
   return (
     <div className={cn("panel group relative overflow-hidden p-4 transition-smooth hover:-translate-y-0.5", isLit && cfg.glow)}>
