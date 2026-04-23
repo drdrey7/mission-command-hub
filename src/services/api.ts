@@ -51,6 +51,139 @@ export interface TaskItem {
   runId?: string | null;
   dispatchStatus?: string | null;
   conclusion?: string | null;
+  currentSection?: string | null;
+  currentStatus?: string | null;
+  currentText?: string | null;
+}
+
+export interface TaskExecutionTokenStats {
+  input?: number | null;
+  output?: number | null;
+  total?: number | null;
+  totalFresh?: number | null;
+  cacheRead?: number | null;
+  cacheWrite?: number | null;
+}
+
+export interface TaskExecutionRun {
+  id: string;
+  recordedAt?: string;
+  runId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
+  status?: string | null;
+  section?: string | null;
+  instruction?: string | null;
+  prompt?: string | null;
+  conclusion?: string | null;
+  summary?: Array<Record<string, unknown>>;
+  sessionFile?: string | null;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  updatedAt?: string | null;
+  runtimeMs?: number | null;
+  tokens?: TaskExecutionTokenStats | null;
+  provider?: string | null;
+  model?: string | null;
+  source?: string | null;
+}
+
+export interface TaskExecutionEvent {
+  id: string;
+  at?: string;
+  type: string;
+  fromSection?: string | null;
+  toSection?: string | null;
+  text?: string | null;
+  prompt?: string | null;
+  agentId?: string | null;
+  sessionKey?: string | null;
+  runId?: string | null;
+  status?: string | null;
+  error?: string | null;
+  note?: string | null;
+}
+
+export interface TaskExecutionSession {
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  status?: string | null;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  updatedAt?: string | null;
+  runtimeMs?: number | null;
+  tokens?: TaskExecutionTokenStats;
+  sessionFile?: string | null;
+  summary?: Array<Record<string, unknown>>;
+  finalResult?: string | null;
+}
+
+export interface TaskExecutionRecord {
+  taskId?: string;
+  title?: string;
+  currentText?: string | null;
+  currentSection?: string | null;
+  currentStatus?: string | null;
+  currentAgentId?: string | null;
+  currentSessionKey?: string | null;
+  currentRunId?: string | null;
+  currentSessionId?: string | null;
+  currentConclusion?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  deletedAt?: string | null;
+  history?: TaskExecutionRun[];
+  events?: TaskExecutionEvent[];
+}
+
+export interface TaskDetailTask extends TaskItem {
+  boardSection?: TaskSectionKey | null;
+  currentSection?: string | null;
+  currentStatus?: string | null;
+  currentText?: string | null;
+}
+
+export interface TaskDetailResponse {
+  ok: boolean;
+  storePath?: string;
+  task: TaskDetailTask;
+  record?: TaskExecutionRecord | null;
+  history: TaskExecutionRun[];
+  events: TaskExecutionEvent[];
+  currentRun?: TaskExecutionRun | null;
+  session?: TaskExecutionSession | null;
+  boardSections?: Record<TaskSectionKey, TaskItem[]> | null;
+}
+
+export interface TaskDetailPayload {
+  task: TaskDetailTask;
+  record?: TaskExecutionRecord | null;
+  history: TaskExecutionRun[];
+  events: TaskExecutionEvent[];
+  currentRun?: TaskExecutionRun | null;
+  session?: TaskExecutionSession | null;
+  boardSections?: Record<TaskSectionKey, TaskItem[]> | null;
+}
+
+export interface TaskReopenInput {
+  text?: string;
+  instruction?: string;
+  section?: TaskSectionKey;
+}
+
+export interface TaskFollowUpInput {
+  instruction: string;
+  prompt: string;
+  agentId: string;
+  section?: TaskSectionKey;
+}
+
+export interface TaskActionResponse {
+  ok: boolean;
+  task: TaskDetailTask;
+  execution: TaskDetailPayload;
+  dispatch?: unknown;
 }
 
 export interface TasksSummary {
@@ -244,6 +377,30 @@ export const editTask = (input: TaskEditInput) =>
       text: input.text,
       taskId: input.taskId,
       newText: input.newText,
+    }),
+  });
+
+export const getTaskDetails = (taskId: string) =>
+  http<TaskDetailResponse>(`/api/tasks/${taskId}/details`);
+
+export const reopenTask = (taskId: string, input?: TaskReopenInput) =>
+  http<TaskActionResponse>("/api/tasks/" + taskId + "/reopen", {
+    method: "POST",
+    body: JSON.stringify({
+      text: input?.text,
+      instruction: input?.instruction,
+      section: input?.section ? input.section : undefined,
+    }),
+  });
+
+export const followUpTask = (taskId: string, input: TaskFollowUpInput) =>
+  http<TaskActionResponse>("/api/tasks/" + taskId + "/follow-up", {
+    method: "POST",
+    body: JSON.stringify({
+      instruction: input.instruction,
+      prompt: input.prompt,
+      agentId: input.agentId,
+      section: input.section ? taskSectionApiLabel(input.section) : undefined,
     }),
   });
 

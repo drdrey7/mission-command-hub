@@ -1,15 +1,19 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Loader2, Pencil, Plus, Trash2, WandSparkles } from "lucide-react";
+import { ArrowUpRight, Loader2, Pencil, Plus, RotateCcw, Trash2, WandSparkles } from "lucide-react";
 import {
   TASK_SECTIONS,
   editTask,
   dispatchTask,
   deleteTask,
+  followUpTask,
   generateTaskPrompt,
   getAgents,
+  getTaskDetails,
   getTasks,
   moveTask,
+  reopenTask,
   type Agent,
+  type TaskDetailResponse,
   type TaskItem,
   type TaskSectionKey,
   type TasksResponse,
@@ -17,6 +21,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
 const sectionTone: Record<TaskSectionKey, string> = {
@@ -58,6 +64,16 @@ const mutationPayload = (task: TaskItem) =>
     ? { section: task.section, text: task.text, taskId: task.taskId }
     : { section: task.section, text: task.text };
 
+const formatDateTime = (value?: string | null) => {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("pt-PT", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+};
+
 export const TasksTab = () => {
   const [board, setBoard] = useState<TasksResponse | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -72,6 +88,13 @@ export const TasksTab = () => {
   const [taskActions, setTaskActions] = useState<Record<string, "delete" | "move" | "edit">>({});
   const [editingTaskKey, setEditingTaskKey] = useState<string | null>(null);
   const [editDrafts, setEditDrafts] = useState<Record<string, string>>({});
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailBusy, setDetailBusy] = useState<"save" | "reopen" | "dispatch" | "prompt" | null>(null);
+  const [detail, setDetail] = useState<TaskDetailResponse | null>(null);
+  const [detailInstruction, setDetailInstruction] = useState("");
+  const [detailPrompt, setDetailPrompt] = useState("");
+  const [detailAgent, setDetailAgent] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -105,6 +128,127 @@ export const TasksTab = () => {
 
     return () => window.clearInterval(interval);
   }, []);
+
+  const loadTaskDetail = async (taskId: string) => {
+    setDetailLoading(true);
+    setError(null);
+    try {
+      const response = await getTaskDetails(taskId);
+      setDetail(response);
+      const nextInstruction = response.task.currentText || response.task.text || "";
+      setDetailInstruction(nextInstruction);
+      setDetailPrompt(response.task.sessionKey ? (response.currentRun?.prompt || nextInstruction) : nextInstruction);
+      setDetailAgent(response.task.agentId || response.currentRun?.agentId || selectedAgent || agents[0]?.key || "");
+      setDetailOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao abrir detalhe da tarefa");
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const refreshCurrentDetail = async () => {
+    if (!detail) return;
+    await loadTaskDetail(getTaskKey(detail.task));
+  };
+
+  const openTaskDetail = async (task: TaskItem) => {
+    await loadTaskDetail(getTaskKey(task));
+  };
+
+  const handleGenerateDetailPrompt = async () => {
+    const instruction = detailInstruction.trim();
+    const agentId = detailAgent.trim() || selectedAgent;
+    if (!instruction || !agentId || detailBusy) return;
+
+    setDetailBusy("prompt");
+    setError(null);
+    try {
+      const result = await generateTaskPrompt({
+        idea: instruction,
+        agentId,
+        section: "inProgress",
+      });
+      setDetailPrompt(result.prompt);
+      setStatus(`Prompt do detalhe gerado${result.transport ? ` via ${result.transport}` : ""}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao gerar prompt de seguimento");
+    } finally {
+      setDetailBusy(null);
+    }
+  };
+
+  const handleSaveDetailText = async () => {
+    const task = detail?.task;
+    const taskId = task ? getTaskKey(task) : "";
+    const nextText = detailInstruction.trim();
+    if (!task || !taskId || !nextText || detailBusy) return;
+
+    setDetailBusy("save");
+    setError(null);
+    try {
+      await editTask({
+        section: task.section,
+        text: task.text,
+        taskId,
+        newText: nextText,
+      });
+      setStatus("Texto da tarefa atualizado.");
+      await Promise.all([refreshTasks(), refreshCurrentDetail()]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao guardar a edição");
+    } finally {
+      setDetailBusy(null);
+    }
+  };
+
+  const handleReopenDetail = async () => {
+    const task = detail?.task;
+    const taskId = task ? getTaskKey(task) : "";
+    const nextText = detailInstruction.trim();
+    if (!task || !taskId || detailBusy) return;
+
+    setDetailBusy("reopen");
+    setError(null);
+    try {
+      await reopenTask(taskId, {
+        text: nextText || undefined,
+        section: "inProgress",
+      });
+      setStatus("Tarefa reaberta para In Progress.");
+      await Promise.all([refreshTasks(), refreshCurrentDetail()]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao reabrir a tarefa");
+    } finally {
+      setDetailBusy(null);
+    }
+  };
+
+  const handleFollowUpDetail = async () => {
+    const task = detail?.task;
+    const taskId = task ? getTaskKey(task) : "";
+    const instruction = detailInstruction.trim();
+    const promptText = detailPrompt.trim() || instruction;
+    const agentId = detailAgent.trim() || selectedAgent;
+    if (!task || !taskId || !instruction || !promptText || !agentId || detailBusy) return;
+
+    setDetailBusy("dispatch");
+    setError(null);
+    try {
+      await followUpTask(taskId, {
+        instruction,
+        prompt: promptText,
+        agentId,
+        section: "inProgress",
+      });
+      setStatus("Follow-up enviado e tarefa regressou a In Progress.");
+      await Promise.all([refreshTasks(), refreshCurrentDetail()]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao despachar o follow-up");
+    } finally {
+      setDetailBusy(null);
+    }
+  };
 
   const handleGeneratePrompt = async () => {
     const trimmedIdea = idea.trim();
@@ -250,6 +394,7 @@ export const TasksTab = () => {
   const total = board?.summary.total ?? 0;
   const open = (board?.summary.standby ?? 0) + (board?.summary.inProgress ?? 0);
   const completed = board?.summary.completed ?? 0;
+  const detailTask = detail?.task ?? null;
 
   return (
     <div className="space-y-4">
@@ -483,6 +628,16 @@ export const TasksTab = () => {
                           </div>
 
                           <div className="flex shrink-0 items-center gap-1">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                              onClick={() => void openTaskDetail(task)}
+                              aria-label={`Abrir detalhe da tarefa ${task.text}`}
+                            >
+                              <ArrowUpRight className="h-4 w-4" />
+                            </Button>
                             {!isEditing && (
                               <Button
                                 type="button"
@@ -568,6 +723,306 @@ export const TasksTab = () => {
           );
         })}
       </div>
+
+      <Sheet open={detailOpen} onOpenChange={setDetailOpen}>
+        <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-3xl">
+          <SheetHeader className="space-y-2 pr-8">
+            <SheetTitle className="text-lg font-semibold">
+              {detailTask ? detailTask.text : "Detalhe da tarefa"}
+            </SheetTitle>
+            <SheetDescription className="text-sm text-muted-foreground">
+              {detailLoading
+                ? "A carregar detalhe e histórico..."
+                : detailTask
+                  ? `Task ${getTaskKey(detailTask)} · ${detailTask.currentSection || detailTask.section} · ${detailTask.currentStatus || detailTask.dispatchStatus || "sem estado"}`
+                  : "Abre uma tarefa para ver execução, sessão e histórico."}
+            </SheetDescription>
+          </SheetHeader>
+
+          <div className="mt-6 space-y-5">
+            {detailLoading && (
+              <div className="rounded-2xl border border-border/60 bg-surface-1/60 p-4 text-sm text-muted-foreground">
+                A carregar detalhe persistido...
+              </div>
+            )}
+
+            {!detailLoading && detailTask && (
+              <>
+                <div className="rounded-2xl border border-border/60 bg-background/70 p-4">
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {detailTask.currentSection || detailTask.section}
+                    </span>
+                    <span
+                      className={cn(
+                        "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+                        detailTask.section === "completed" || detailTask.currentStatus === "completed"
+                          ? "border-status-online/30 text-status-online"
+                          : "border-status-warning/30 text-status-warning",
+                      )}
+                    >
+                      {detailTask.currentStatus || detailTask.dispatchStatus || "sem estado"}
+                    </span>
+                    {detailTask.agentId && (
+                      <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {detailTask.agentId}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                        Instrução atual
+                      </label>
+                      <Textarea
+                        value={detailInstruction}
+                        onChange={(event) => setDetailInstruction(event.target.value)}
+                        rows={5}
+                        className="min-h-[130px] resize-none"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                        Prompt de follow-up
+                      </label>
+                      <Textarea
+                        value={detailPrompt}
+                        onChange={(event) => setDetailPrompt(event.target.value)}
+                        rows={5}
+                        className="min-h-[130px] resize-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                        Agente
+                      </label>
+                      <Select value={detailAgent} onValueChange={setDetailAgent}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Selecionar agente" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {agents.map((agent) => (
+                            <SelectItem key={agent.key} value={agent.key}>
+                              {agent.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                        Sessão actual
+                      </label>
+                      <div className="rounded-xl border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                        {detail.session?.sessionKey || detailTask.sessionKey || "Sem sessão activa"}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => void handleGenerateDetailPrompt()}
+                      disabled={!detailInstruction.trim() || !detailAgent.trim() || detailBusy !== null}
+                      className="w-full sm:w-auto"
+                    >
+                      {detailBusy === "prompt" ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
+                      Gerar prompt
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => void handleSaveDetailText()}
+                      disabled={!detailInstruction.trim() || detailBusy !== null}
+                      className="w-full sm:w-auto"
+                    >
+                      {detailBusy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}
+                      Guardar texto
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => void handleReopenDetail()}
+                      disabled={!detailInstruction.trim() || detailBusy !== null}
+                      className="w-full sm:w-auto"
+                    >
+                      {detailBusy === "reopen" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                      Reabrir
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => void handleFollowUpDetail()}
+                      disabled={!detailInstruction.trim() || !detailPrompt.trim() || !detailAgent.trim() || detailBusy !== null}
+                      className="w-full sm:w-auto"
+                    >
+                      {detailBusy === "dispatch" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUpRight className="h-4 w-4" />}
+                      Follow-up e dispatch
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="rounded-2xl border border-border/60 bg-background/70 p-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                        Sessão associada
+                      </h4>
+                      <span className="text-[11px] text-muted-foreground">
+                        {detail.session?.status || "sem status"}
+                      </span>
+                    </div>
+                    {detail.session ? (
+                      <div className="mt-3 space-y-2 text-sm">
+                        <p className="break-all font-mono text-xs text-foreground">
+                          {detail.session.sessionId ? `session id: ${detail.session.sessionId}` : "session id: —"}
+                        </p>
+                        <p className="break-all font-mono text-xs text-foreground">
+                          {detail.session.sessionKey ? `session key: ${detail.session.sessionKey}` : "session key: —"}
+                        </p>
+                        <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                          <span>Início: {formatDateTime(detail.session.startedAt)}</span>
+                          <span>Fim: {formatDateTime(detail.session.endedAt)}</span>
+                          <span>Actualizado: {formatDateTime(detail.session.updatedAt)}</span>
+                          <span>Duração: {detail.session.runtimeMs ? `${Math.round(detail.session.runtimeMs / 1000)}s` : "—"}</span>
+                        </div>
+                        <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                            Resultado final
+                          </p>
+                          <p className="mt-2 whitespace-pre-wrap text-sm text-foreground">
+                            {detail.session.finalResult || "Sem resultado final disponível"}
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-sm text-muted-foreground">Sem sessão associada disponível.</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-border/60 bg-background/70 p-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                        Timestamps
+                      </h4>
+                      <span className="text-[11px] text-muted-foreground">
+                        {detail.history.length} execuções
+                      </span>
+                    </div>
+                    <div className="mt-3 space-y-2 text-sm">
+                      <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                        <span>Criada: {formatDateTime(detail.record?.createdAt)}</span>
+                        <span>Actualizada: {formatDateTime(detail.record?.updatedAt)}</span>
+                        <span>Apagada: {formatDateTime(detail.record?.deletedAt)}</span>
+                        <span>Secção actual: {detail.task.currentSection || detail.task.section}</span>
+                      </div>
+                      <div className="rounded-xl border border-border/60 bg-muted/20 p-3 text-xs text-muted-foreground">
+                        Histórico persistido em <span className="break-all font-mono text-foreground">{detail.storePath}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                      Histórico de execuções
+                    </h4>
+                    <span className="text-[11px] text-muted-foreground">
+                      {detail.history.length} registos
+                    </span>
+                  </div>
+                  <div className="space-y-3">
+                    {detail.history.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-border/60 p-4 text-sm text-muted-foreground">
+                        Ainda não existe histórico guardado para esta tarefa.
+                      </div>
+                    ) : (
+                      detail.history.map((run) => (
+                        <article key={run.id} className="rounded-xl border border-border/60 bg-background/70 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="space-y-1">
+                              <p className="text-sm font-semibold text-foreground">
+                                {run.status || "unknown"} · {run.section || "—"}
+                              </p>
+                              <p className="font-mono text-[11px] text-muted-foreground">
+                                {run.runId || run.sessionId || run.id}
+                              </p>
+                            </div>
+                            <div className="text-right text-[11px] text-muted-foreground">
+                              <p>{formatDateTime(run.startedAt)}</p>
+                              <p>{formatDateTime(run.endedAt)}</p>
+                            </div>
+                          </div>
+                          <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                            <span>Session key: {run.sessionKey || "—"}</span>
+                            <span>Session id: {run.sessionId || "—"}</span>
+                            <span>Agente: {run.agentId || "—"}</span>
+                            <span>Origem: {run.source || "—"}</span>
+                          </div>
+                          <div className="mt-3 space-y-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                              Instrução
+                            </p>
+                            <p className="whitespace-pre-wrap text-sm text-foreground">
+                              {run.instruction || "—"}
+                            </p>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                              Resposta
+                            </p>
+                            <p className="whitespace-pre-wrap text-sm text-foreground">
+                              {run.conclusion || "—"}
+                            </p>
+                          </div>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-3">
+                  <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                    Linha temporal resumida
+                  </h4>
+                  <div className="space-y-2">
+                    {(detail.events || []).length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-border/60 p-4 text-sm text-muted-foreground">
+                        Sem eventos adicionais registados.
+                      </div>
+                    ) : (
+                      detail.events.map((event) => (
+                        <div key={event.id} className="rounded-xl border border-border/60 bg-background/60 p-3 text-sm">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="font-medium text-foreground">{event.type}</p>
+                            <span className="text-[11px] text-muted-foreground">{formatDateTime(event.at)}</span>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {[
+                              event.fromSection ? `de ${event.fromSection}` : null,
+                              event.toSection ? `para ${event.toSection}` : null,
+                              event.agentId ? `agente ${event.agentId}` : null,
+                            ].filter(Boolean).join(" · ")}
+                          </p>
+                          {event.text && <p className="mt-2 whitespace-pre-wrap text-sm text-foreground">{event.text}</p>}
+                          {event.error && <p className="mt-2 text-xs text-status-offline">{event.error}</p>}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 };
