@@ -38,6 +38,7 @@ const TASK_SECTION_META = {
   inProgress: { label: 'In Progress' },
   completed: { label: 'Completed' },
 };
+const COMPLETED_DISPATCH_STATUSES = new Set(['completed', 'complete', 'done', 'finished', 'succeeded', 'success']);
 const OPENROUTER_CHAT_COMPLETIONS_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENCLAW_CLI_CANDIDATES = [
   process.env.OPENCLAW_CLI_PATH?.trim(),
@@ -58,6 +59,28 @@ function normalizeTaskSection(value) {
   if (normalized === 'in progress' || normalized === 'inprogress') return 'inProgress';
   if (normalized === 'completed' || normalized === 'complete' || normalized === 'done') return 'completed';
   return null;
+}
+
+function normalizeDispatchStatus(value) {
+  if (!value) return null;
+  const normalized = String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ');
+
+  if (COMPLETED_DISPATCH_STATUSES.has(normalized)) return 'completed';
+  if (normalized === 'queued' || normalized === 'pending') return 'queued';
+  if (normalized === 'dispatched' || normalized === 'accepted' || normalized === 'running') return 'dispatched';
+  if (normalized === 'failed' || normalized === 'error' || normalized === 'errored') return 'failed';
+  return String(value).trim();
+}
+
+function isTaskCompleted(task) {
+  if (!task) return false;
+  if (task.section === 'completed') return true;
+  if (task.checked === true) return true;
+  return normalizeDispatchStatus(task.dispatchStatus) === 'completed';
 }
 
 function sectionLabel(sectionKey, fallbackLabel) {
@@ -278,16 +301,82 @@ function rebuildMarkdown(document) {
 }
 
 function loadTasksDocument() {
-  if (!fs.existsSync(TASKS_PATH)) {
-    return parseTasksMarkdown('');
+  const markdown = fs.existsSync(TASKS_PATH) ? fs.readFileSync(TASKS_PATH, 'utf8') : '';
+  const document = parseTasksMarkdown(markdown);
+  if (synchronizeTasksDocument(document)) {
+    saveTasksDocument(document);
+    document.raw = rebuildMarkdown(document);
   }
-
-  const markdown = fs.readFileSync(TASKS_PATH, 'utf8');
-  return parseTasksMarkdown(markdown);
+  return document;
 }
 
 function saveTasksDocument(document) {
   fs.writeFileSync(TASKS_PATH, rebuildMarkdown(document));
+}
+
+function synchronizeTasksDocument(document) {
+  let changed = false;
+  const completedMoves = [];
+
+  for (const block of document.blocks) {
+    if (!block.canonicalSection) continue;
+
+    for (let index = block.entries.length - 1; index >= 0; index -= 1) {
+      const entry = block.entries[index];
+      if (entry.kind !== 'task') continue;
+
+      const task = entry.task;
+
+      if (!task.taskId) {
+        task.taskId = generateTaskId();
+        changed = true;
+      }
+
+      if (!task.id || task.id !== task.taskId) {
+        task.id = task.taskId;
+        changed = true;
+      }
+
+      const normalizedDispatchStatus = normalizeDispatchStatus(task.dispatchStatus);
+      if (normalizedDispatchStatus && normalizedDispatchStatus !== task.dispatchStatus) {
+        task.dispatchStatus = normalizedDispatchStatus;
+        changed = true;
+      }
+
+      if (task.section !== block.canonicalSection) {
+        task.section = block.canonicalSection;
+        changed = true;
+      }
+
+      if (block.canonicalSection === 'completed') {
+        if (task.checked !== true) {
+          task.checked = true;
+          changed = true;
+        }
+        continue;
+      }
+
+      if (isTaskCompleted(task)) {
+        block.entries.splice(index, 1);
+        task.section = 'completed';
+        task.checked = true;
+        completedMoves.push(task);
+        changed = true;
+      }
+    }
+  }
+
+  if (completedMoves.length > 0) {
+    const completedBlock = findOrCreateSectionBlock(document, 'completed');
+    for (const task of completedMoves) {
+      completedBlock.entries.push({
+        kind: 'task',
+        task,
+      });
+    }
+  }
+
+  return changed;
 }
 
 function findTaskEntry(block, text) {
@@ -748,7 +837,7 @@ app.post('/api/tasks/dispatch', async (req, res) => {
         agentId,
         sessionKey,
         runId: dispatchResult?.runId ? String(dispatchResult.runId) : null,
-        dispatchStatus: dispatchResult?.status ? String(dispatchResult.status) : 'accepted',
+        dispatchStatus: normalizeDispatchStatus(dispatchResult?.status || 'accepted'),
       });
       saveTasksDocument(document);
 
@@ -853,13 +942,14 @@ app.delete('/api/tasks', (req, res) => {
 // PATCH /api/tasks - Move a task between sections
 app.patch('/api/tasks', (req, res) => {
   try {
-    const { section, text, taskId, newSection } = req.body;
-    if (!newSection || (!section && !taskId)) {
-      return res.status(400).json({ error: 'section/taskId and newSection are required' });
+    const { section, text, taskId, newSection, newText } = req.body;
+    const hasTextUpdate = newText !== undefined;
+    if ((!newSection && !hasTextUpdate) || (!section && !taskId)) {
+      return res.status(400).json({ error: 'section/taskId and newSection or newText are required' });
     }
     const sourceSection = section ? normalizeTaskSection(section) : null;
     const targetSection = normalizeTaskSection(newSection);
-    if ((section && !sourceSection) || !targetSection) {
+    if ((section && !sourceSection) || (newSection && !targetSection)) {
       return res.status(400).json({ error: 'Invalid section' });
     }
     if (!fs.existsSync(TASKS_PATH)) {
@@ -867,11 +957,15 @@ app.patch('/api/tasks', (req, res) => {
     }
     const document = loadTasksDocument();
     let movedTask = null;
+    let sourceBlock = null;
+    let sourceIndex = null;
 
     if (taskId) {
       const taskRef = findTaskEntryById(document, String(taskId).trim());
       if (taskRef) {
         movedTask = taskRef.entry.task;
+        sourceBlock = taskRef.block;
+        sourceIndex = taskRef.index;
         taskRef.block.entries.splice(taskRef.index, 1);
       }
     } else {
@@ -880,6 +974,8 @@ app.patch('/api/tasks', (req, res) => {
         const taskRef = findTaskEntry(block, String(text).trim());
         if (!taskRef) continue;
         movedTask = taskRef.entry.task;
+        sourceBlock = block;
+        sourceIndex = taskRef.index;
         block.entries.splice(taskRef.index, 1);
         break;
       }
@@ -889,12 +985,30 @@ app.patch('/api/tasks', (req, res) => {
       return res.status(404).json({ error: 'Task not found in section' });
     }
 
-    movedTask.section = targetSection;
-    const targetBlock = findOrCreateSectionBlock(document, targetSection);
-    targetBlock.entries.push({
-      kind: 'task',
-      task: movedTask,
-    });
+    if (hasTextUpdate) {
+      const nextText = String(newText).trim();
+      if (!nextText) {
+        return res.status(400).json({ error: 'newText cannot be empty' });
+      }
+      movedTask.text = nextText;
+      movedTask.owner = inferTaskOwner(nextText);
+    }
+
+    if (targetSection) {
+      movedTask.section = targetSection;
+      const targetBlock = findOrCreateSectionBlock(document, targetSection);
+      targetBlock.entries.push({
+        kind: 'task',
+        task: movedTask,
+      });
+    } else {
+      const targetBlock = sourceBlock || findOrCreateSectionBlock(document, movedTask.section || sourceSection);
+      const insertIndex = typeof sourceIndex === 'number' && sourceIndex >= 0 ? sourceIndex : targetBlock.entries.length;
+      targetBlock.entries.splice(Math.min(insertIndex, targetBlock.entries.length), 0, {
+        kind: 'task',
+        task: movedTask,
+      });
+    }
 
     saveTasksDocument(document);
     res.json({ success: true, task: movedTask });

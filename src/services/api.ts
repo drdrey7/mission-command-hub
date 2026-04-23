@@ -71,6 +71,10 @@ export interface TaskMutationInput {
   taskId?: string | null;
 }
 
+export interface TaskEditInput extends TaskMutationInput {
+  newText: string;
+}
+
 export interface GenerateTaskPromptInput {
   idea: string;
   agentId?: string;
@@ -228,6 +232,17 @@ export const moveTask = (input: TaskMutationInput, newSection: TaskSectionKey) =
       text: input.text,
       taskId: input.taskId,
       newSection: taskSectionApiLabel(newSection),
+    }),
+  });
+
+export const editTask = (input: TaskEditInput) =>
+  http<{ success: boolean }>("/api/tasks", {
+    method: "PATCH",
+    body: JSON.stringify({
+      section: taskSectionApiLabel(input.section),
+      text: input.text,
+      taskId: input.taskId,
+      newText: input.newText,
     }),
   });
 

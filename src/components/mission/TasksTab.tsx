@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Loader2, Plus, Trash2, WandSparkles } from "lucide-react";
+import { Loader2, Pencil, Plus, Trash2, WandSparkles } from "lucide-react";
 import {
   TASK_SECTIONS,
+  editTask,
   dispatchTask,
   deleteTask,
   generateTaskPrompt,
@@ -50,6 +51,8 @@ const taskStatusTone: Record<string, string> = {
   failed: "border-status-offline/30 text-status-offline",
 };
 
+const getTaskKey = (task: TaskItem) => task.taskId ?? task.id;
+
 const mutationPayload = (task: TaskItem) =>
   task.taskId
     ? { section: task.section, text: task.text, taskId: task.taskId }
@@ -66,7 +69,9 @@ export const TasksTab = () => {
   const [loadingAgents, setLoadingAgents] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [dispatching, setDispatching] = useState(false);
-  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [taskActions, setTaskActions] = useState<Record<string, "delete" | "move" | "edit">>({});
+  const [editingTaskKey, setEditingTaskKey] = useState<string | null>(null);
+  const [editDrafts, setEditDrafts] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -89,6 +94,16 @@ export const TasksTab = () => {
       setLoading(false);
       setLoadingAgents(false);
     });
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void refreshTasks().catch(() => {
+        // The next interval will retry; avoid replacing the current board on transient failures.
+      });
+    }, 5000);
+
+    return () => window.clearInterval(interval);
   }, []);
 
   const handleGeneratePrompt = async () => {
@@ -150,8 +165,9 @@ export const TasksTab = () => {
   };
 
   const handleDelete = async (task: TaskItem) => {
-    if (busyKey) return;
-    setBusyKey(task.id);
+    const taskKey = getTaskKey(task);
+    if (taskActions[taskKey] || editingTaskKey === taskKey) return;
+    setTaskActions((current) => ({ ...current, [taskKey]: "delete" }));
     setError(null);
     try {
       await deleteTask(mutationPayload(task));
@@ -159,13 +175,18 @@ export const TasksTab = () => {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao eliminar tarefa");
     } finally {
-      setBusyKey(null);
+      setTaskActions((current) => {
+        const next = { ...current };
+        delete next[taskKey];
+        return next;
+      });
     }
   };
 
   const handleMove = async (task: TaskItem, nextSection: TaskSectionKey) => {
-    if (busyKey || nextSection === task.section) return;
-    setBusyKey(task.id);
+    const taskKey = getTaskKey(task);
+    if (taskActions[taskKey] || nextSection === task.section || editingTaskKey === taskKey) return;
+    setTaskActions((current) => ({ ...current, [taskKey]: "move" }));
     setError(null);
     try {
       await moveTask(mutationPayload(task), nextSection);
@@ -173,7 +194,56 @@ export const TasksTab = () => {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao mover tarefa");
     } finally {
-      setBusyKey(null);
+      setTaskActions((current) => {
+        const next = { ...current };
+        delete next[taskKey];
+        return next;
+      });
+    }
+  };
+
+  const startEditingTask = (task: TaskItem) => {
+    const taskKey = getTaskKey(task);
+    setEditingTaskKey(taskKey);
+    setEditDrafts((current) => ({
+      ...current,
+      [taskKey]: task.text,
+    }));
+  };
+
+  const cancelEditingTask = (taskKey: string) => {
+    setEditingTaskKey((current) => (current === taskKey ? null : current));
+    setEditDrafts((current) => {
+      const next = { ...current };
+      delete next[taskKey];
+      return next;
+    });
+  };
+
+  const handleSaveEdit = async (task: TaskItem) => {
+    const taskKey = getTaskKey(task);
+    const nextText = (editDrafts[taskKey] || "").trim();
+    if (!nextText || taskActions[taskKey]) return;
+
+    setTaskActions((current) => ({ ...current, [taskKey]: "edit" }));
+    setError(null);
+    try {
+      await editTask({
+        section: task.section,
+        text: task.text,
+        taskId: task.taskId ?? task.id,
+        newText: nextText,
+      });
+      cancelEditingTask(taskKey);
+      await refreshTasks();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao editar tarefa");
+    } finally {
+      setTaskActions((current) => {
+        const next = { ...current };
+        delete next[taskKey];
+        return next;
+      });
     }
   };
 
@@ -348,84 +418,145 @@ export const TasksTab = () => {
                     Sem tarefas nesta secção
                   </div>
                 ) : (
-                  items.map((task) => (
-                    <article key={task.taskId || task.id} className="rounded-xl border border-border/60 bg-background/70 p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-foreground">{task.text}</p>
-                          <div className="mt-1 flex flex-wrap gap-2">
-                            <span
-                              className={cn(
-                                "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
-                                task.checked ? "border-status-online/30 text-status-online" : "border-border text-muted-foreground",
-                              )}
-                            >
-                              {task.checked ? "Concluída" : "Aberta"}
-                            </span>
-                            {task.owner && (
-                              <span
-                                className={cn(
-                                  "font-mono text-[10px] lowercase",
-                                  ownerTone[task.owner] ?? "text-muted-foreground",
-                                )}
-                              >
-                                {task.owner}
-                              </span>
+                  items.map((task) => {
+                    const taskKey = getTaskKey(task);
+                    const taskAction = taskActions[taskKey] ?? null;
+                    const isEditing = editingTaskKey === taskKey;
+                    const draftText = editDrafts[taskKey] ?? task.text;
+                    return (
+                      <article key={taskKey} className="rounded-xl border border-border/60 bg-background/70 p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            {isEditing ? (
+                              <Textarea
+                                value={draftText}
+                                onChange={(event) =>
+                                  setEditDrafts((current) => ({
+                                    ...current,
+                                    [taskKey]: event.target.value,
+                                  }))
+                                }
+                                rows={3}
+                                className="min-h-[92px] resize-none"
+                                disabled={taskAction === "edit"}
+                              />
+                            ) : (
+                              <p className="text-sm font-medium text-foreground">{task.text}</p>
                             )}
-                            {task.dispatchStatus && (
-                              <span
-                                className={cn(
-                                  "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
-                                  taskStatusTone[task.dispatchStatus] ?? "border-border text-muted-foreground",
+                            {!isEditing && (
+                              <div className="mt-1 flex flex-wrap gap-2">
+                                <span
+                                  className={cn(
+                                    "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+                                    task.checked ? "border-status-online/30 text-status-online" : "border-border text-muted-foreground",
+                                  )}
+                                >
+                                  {task.checked ? "Concluída" : "Aberta"}
+                                </span>
+                                {task.owner && (
+                                  <span
+                                    className={cn(
+                                      "font-mono text-[10px] lowercase",
+                                      ownerTone[task.owner] ?? "text-muted-foreground",
+                                    )}
+                                  >
+                                    {task.owner}
+                                  </span>
                                 )}
-                              >
-                                {taskStatusLabel[task.dispatchStatus] ?? task.dispatchStatus}
-                              </span>
+                                {task.dispatchStatus && (
+                                  <span
+                                    className={cn(
+                                      "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+                                      taskStatusTone[task.dispatchStatus] ?? "border-border text-muted-foreground",
+                                    )}
+                                  >
+                                    {taskStatusLabel[task.dispatchStatus] ?? task.dispatchStatus}
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </div>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0 text-muted-foreground hover:text-status-offline"
-                          onClick={() => handleDelete(task)}
-                          disabled={busyKey === task.taskId || busyKey === task.id}
-                          aria-label={`Eliminar tarefa ${task.text}`}
-                        >
-                          {busyKey === task.taskId || busyKey === task.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </div>
 
-                      <div className="mt-3 space-y-2">
-                        <div className="grid gap-1 text-[10px] text-muted-foreground sm:grid-cols-2">
-                          <span className="truncate">ID: {task.taskId || task.id}</span>
-                          <span className="truncate">Sessão: {task.sessionKey || "—"}</span>
+                          <div className="flex shrink-0 items-center gap-1">
+                            {!isEditing && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                onClick={() => startEditingTask(task)}
+                                disabled={Boolean(taskAction)}
+                                aria-label={`Editar tarefa ${task.text}`}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                            )}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-status-offline"
+                              onClick={() => handleDelete(task)}
+                              disabled={Boolean(taskAction) || isEditing}
+                              aria-label={`Eliminar tarefa ${task.text}`}
+                            >
+                              {taskAction === "delete" ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </div>
                         </div>
 
-                        <Select
-                          value={task.section}
-                          onValueChange={(value) => handleMove(task, value as TaskSectionKey)}
-                          disabled={busyKey === task.taskId || busyKey === task.id}
-                        >
-                          <SelectTrigger className="h-9 w-full text-xs">
-                            <SelectValue placeholder="Mover para…" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {TASK_SECTIONS.map((option) => (
-                              <SelectItem key={option.key} value={option.key}>
-                                Mover para {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </article>
-                  ))
+                        {isEditing ? (
+                          <div className="mt-3 flex gap-2">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="h-9 flex-1"
+                              onClick={() => cancelEditingTask(taskKey)}
+                              disabled={taskAction === "edit"}
+                            >
+                              Cancelar
+                            </Button>
+                            <Button
+                              type="button"
+                              className="h-9 flex-1"
+                              onClick={() => handleSaveEdit(task)}
+                              disabled={!draftText.trim() || taskAction === "edit"}
+                            >
+                              {taskAction === "edit" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Guardar"}
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="mt-3 space-y-2">
+                            <div className="grid gap-1 text-[10px] text-muted-foreground sm:grid-cols-2">
+                              <span className="truncate">ID: {task.taskId || task.id}</span>
+                              <span className="truncate">Sessão: {task.sessionKey || "—"}</span>
+                            </div>
+
+                            <Select
+                              value={task.section}
+                              onValueChange={(value) => handleMove(task, value as TaskSectionKey)}
+                              disabled={Boolean(taskAction)}
+                            >
+                              <SelectTrigger className="h-9 w-full text-xs">
+                                <SelectValue placeholder="Mover para…" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {TASK_SECTIONS.map((option) => (
+                                  <SelectItem key={option.key} value={option.key}>
+                                    Mover para {option.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })
                 )}
               </div>
             </section>
