@@ -1,52 +1,38 @@
 import { useEffect, useState } from "react";
 import { ClipboardList, ChevronRight } from "lucide-react";
-import { getTasks } from "@/services/api";
-import type { Task } from "@/data/mockData";
+import { getTasks, type TasksResponse } from "@/services/api";
 import { cn } from "@/lib/utils";
 
-const agentColor: Record<NonNullable<Task["agent"]>, string> = {
-  comandante: "text-agent-comandante",
-  cyber: "text-agent-cyber",
-  flow: "text-agent-flow",
-  ledger: "text-agent-ledger",
-};
-
-const colLabel: Record<Task["column"], string> = {
-  standby: "Standby",
-  in_progress: "Em curso",
-  blocked: "Bloqueada",
-  done: "Concluída",
-};
-
-const colStyle: Record<Task["column"], string> = {
-  in_progress: "bg-status-online/10 text-status-online border-status-online/30",
-  blocked: "bg-status-offline/10 text-status-offline border-status-offline/30",
-  standby: "bg-status-warning/10 text-status-warning border-status-warning/30",
-  done: "bg-muted/40 text-muted-foreground border-border",
-};
-
-interface Props { onSeeAll?: () => void }
+interface Props {
+  onSeeAll?: () => void;
+}
 
 export const ActiveTasksPanel = ({ onSeeAll }: Props) => {
-  const [tasks, setTasks] = useState<Task[] | null>(null);
-  useEffect(() => { getTasks().then(setTasks); }, []);
+  const [board, setBoard] = useState<TasksResponse | null>(null);
 
-  const open = (tasks ?? []).filter((t) => t.column !== "done");
-  const top = open.slice(0, 4);
+  useEffect(() => {
+    getTasks().then(setBoard);
+  }, []);
+
+  const summary = board?.summary;
+  const total = summary?.total ?? 0;
+  const open = (summary?.standby ?? 0) + (summary?.inProgress ?? 0);
+  const completed = summary?.completed ?? 0;
+  const completion = total > 0 ? Math.round((completed / total) * 100) : 0;
 
   return (
     <div className="panel flex h-full flex-col p-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-surface-2">
             <ClipboardList className="h-4 w-4 text-agent-comandante" />
           </div>
           <div>
             <h2 className="font-display text-xs font-semibold uppercase tracking-[0.18em] text-foreground">
-              Tarefas em aberto
+              Resumo de tarefas
             </h2>
             <p className="text-[11px] text-muted-foreground">
-              {tasks === null ? "a carregar…" : `${open.length} em aberto · ${tasks.length} totais`}
+              {board === null ? "a carregar…" : `${total} totais · ${open} em aberto`}
             </p>
           </div>
         </div>
@@ -58,24 +44,30 @@ export const ActiveTasksPanel = ({ onSeeAll }: Props) => {
         </button>
       </div>
 
-      <div className="mt-4 flex-1 space-y-2">
-        {top.length === 0 && tasks !== null && (
-          <p className="rounded-lg border border-dashed border-border/60 p-4 text-center text-xs text-muted-foreground">
-            Sem tarefas
-          </p>
-        )}
-        {top.map((t) => (
-          <div key={t.id} className="group flex items-center gap-3 rounded-lg border border-border/40 bg-surface-2/40 p-2.5 transition-smooth hover:border-border hover:bg-surface-2">
-            <div className={cn("h-2 w-2 rounded-full", t.agent ? agentColor[t.agent].replace("text-", "bg-") : "bg-muted-foreground")} />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-foreground">{t.title}</p>
-              {t.agent && <p className={cn("text-[11px] lowercase font-mono", agentColor[t.agent])}>{t.agent}</p>}
-            </div>
-            <span className={cn("rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider", colStyle[t.column])}>
-              {colLabel[t.column]}
-            </span>
+      <div className="mt-4 grid grid-cols-3 gap-2">
+        {[
+          { label: "Total", value: total },
+          { label: "Em aberto", value: open },
+          { label: "Concluídas", value: completed },
+        ].map((item) => (
+          <div key={item.label} className="rounded-xl border border-border/60 bg-surface-2/40 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground">{item.label}</p>
+            <p className="mt-1 font-mono text-lg font-bold tabular-nums text-foreground">{String(item.value).padStart(2, "0")}</p>
           </div>
         ))}
+      </div>
+
+      <div className="mt-4 rounded-xl border border-border/60 bg-surface-1/40 px-3 py-3">
+        <div className="mb-2 flex items-center justify-between text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+          <span>Conclusão</span>
+          <span>{completion}%</span>
+        </div>
+        <div className="h-2 w-full overflow-hidden rounded-full bg-surface-3">
+          <div
+            className={cn("h-full rounded-full bg-status-online transition-all")}
+            style={{ width: `${completion}%` }}
+          />
+        </div>
       </div>
     </div>
   );

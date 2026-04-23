@@ -37,6 +37,70 @@ const API_URL = import.meta.env.VITE_OPENCLAW_API_URL ?? "";
 const TOKEN = (import.meta.env.VITE_OPENCLAW_TOKEN as string | undefined) ?? "";
 export const USE_MOCK = false;
 
+export type TaskSectionKey = "standby" | "inProgress" | "completed";
+
+export interface TaskItem {
+  id: string;
+  text: string;
+  checked: boolean;
+  section: TaskSectionKey;
+  owner: string | null;
+}
+
+export interface TasksSummary {
+  standby: number;
+  inProgress: number;
+  completed: number;
+  total: number;
+}
+
+export interface TasksResponse {
+  summary: TasksSummary;
+  sections: Record<TaskSectionKey, TaskItem[]>;
+  raw?: string;
+}
+
+export interface TaskMutationInput {
+  section: TaskSectionKey;
+  text: string;
+}
+
+export const TASK_SECTIONS: { key: TaskSectionKey; label: string; apiLabel: string }[] = [
+  { key: "standby", label: "Standby", apiLabel: "Standby" },
+  { key: "inProgress", label: "In Progress", apiLabel: "In Progress" },
+  { key: "completed", label: "Completed", apiLabel: "Completed" },
+];
+
+export const taskSectionLabel = (section: TaskSectionKey) =>
+  TASK_SECTIONS.find((entry) => entry.key === section)?.label ?? section;
+
+export const taskSectionApiLabel = (section: TaskSectionKey) =>
+  TASK_SECTIONS.find((entry) => entry.key === section)?.apiLabel ?? taskSectionLabel(section);
+
+const mockTaskSections: Record<TaskSectionKey, TaskItem[]> = {
+  standby: mockTasks.map((task, index) => ({
+    id: `mock-standby-${index + 1}`,
+    text: task.title,
+    checked: false,
+    section: "standby",
+    owner: task.agent ?? null,
+  })),
+  inProgress: [],
+  completed: [],
+};
+
+const mockTaskSummary: TasksSummary = {
+  standby: mockTaskSections.standby.length,
+  inProgress: 0,
+  completed: 0,
+  total: mockTaskSections.standby.length,
+};
+
+const mockTaskResponse: TasksResponse = {
+  summary: mockTaskSummary,
+  sections: mockTaskSections,
+};
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const token = TOKEN || localStorage.getItem("openclaw_token") || "";
   const url = `${API_URL}${path}`;
@@ -73,34 +137,38 @@ export const getAgents = async (): Promise<Agent[]> => {
 };
 
 /* Tasks */
-export const getTasks = (): Promise<Task[]> => {
-  if (USE_MOCK) return delay(mockTasks);
-  return http<any>("/api/tasks").then(data => {
-    console.log("[getTasks] raw data:", data);
-    // Backend returns {"raw":"## Standby\n- task1\n## In Progress\n- task2..."}
-    const raw = data.raw || "";
-    const tasks: Task[] = [];
-    let section: Task["column"] = "standby";
-    raw.split("\n").forEach(line => {
-      const trimmed = line.trim();
-      if (trimmed.startsWith("##")) {
-        const raw_section = trimmed.replace("##", "").trim().toLowerCase();
-        // Map section names to kanban column values
-        section = raw_section === "in progress" ? "in_progress" :
-                  raw_section === "completed" ? "done" :
-                  raw_section === "standby" ? "standby" :
-                  raw_section === "done" ? "done" :
-                  raw_section === "blocked" ? "blocked" : "standby"; // safe fallback
-      } else if (trimmed.startsWith("-")) {
-        const title = trimmed.substring(1).trim();
-        const prio: Task["priority"] = title.toLowerCase().includes("urgente") ? "alta" : title.toLowerCase().includes("medio") ? "média" : "baixa";
-        tasks.push({ id: `t-${tasks.length + 1}`, title, agent: "comandante", priority: prio, time: "agora", column: section });
-      }
-    });
-    console.log("[getTasks] parsed tasks:", tasks);
-    return tasks.length > 0 ? tasks : mockTasks;
-  });
+export const getTasks = (): Promise<TasksResponse> => {
+  if (USE_MOCK) return delay(mockTaskResponse);
+  return http<TasksResponse>("/api/tasks");
 };
+
+export const createTask = (input: TaskMutationInput) =>
+  http<{ success: boolean }>("/api/tasks", {
+    method: "POST",
+    body: JSON.stringify({
+      section: taskSectionApiLabel(input.section),
+      text: input.text,
+    }),
+  });
+
+export const deleteTask = (input: TaskMutationInput) =>
+  http<{ success: boolean }>("/api/tasks", {
+    method: "DELETE",
+    body: JSON.stringify({
+      section: taskSectionApiLabel(input.section),
+      text: input.text,
+    }),
+  });
+
+export const moveTask = (input: TaskMutationInput, newSection: TaskSectionKey) =>
+  http<{ success: boolean }>("/api/tasks", {
+    method: "PATCH",
+    body: JSON.stringify({
+      section: taskSectionApiLabel(input.section),
+      text: input.text,
+      newSection: taskSectionApiLabel(newSection),
+    }),
+  });
 
 /* Missions */
 export interface NewMissionInput {
