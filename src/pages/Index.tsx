@@ -15,8 +15,31 @@ const Index = () => {
   const [chatAgent, setChatAgent] = useState<string | undefined>();
   const [chatOpen, setChatOpen] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentError, setAgentError] = useState<string | null>(null);
 
-  useEffect(() => { getAgents().then(setAgents); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    const loadAgents = async () => {
+      try {
+        const next = await getAgents();
+        if (cancelled) return;
+        setAgents(next);
+        setAgentError(null);
+      } catch (err) {
+        if (!cancelled) setAgentError(err instanceof Error ? err.message : "Falha ao carregar agentes");
+      }
+    };
+
+    void loadAgents();
+    const interval = window.setInterval(() => {
+      void loadAgents();
+    }, 10_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   const activeCount = agents.filter((a) => a.status === "em_voo" || a.status === "taxiing").length;
 
@@ -49,6 +72,11 @@ const Index = () => {
                 {String(activeCount).padStart(2, "0")} / {String(agents.length).padStart(2, "0")} ativos
               </span>
             </div>
+            {agentError && (
+              <div className="mb-3 rounded-xl border border-status-offline/30 bg-status-offline/5 px-4 py-3 text-sm text-status-offline">
+                {agentError}
+              </div>
+            )}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {agents.length === 0 ? (
                 <p className="col-span-full rounded-xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">

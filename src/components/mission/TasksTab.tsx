@@ -46,12 +46,20 @@ const ownerTone: Record<string, string> = {
 };
 
 const taskStatusLabel: Record<string, string> = {
+  idle: "Inativa",
+  in_progress: "Em curso",
+  completed: "Concluída",
+  error: "Erro",
   queued: "Em fila",
   dispatched: "Disparada",
   failed: "Falhou",
 };
 
 const taskStatusTone: Record<string, string> = {
+  idle: "border-border text-muted-foreground",
+  in_progress: "border-status-online/30 text-status-online",
+  completed: "border-status-online/30 text-status-online",
+  error: "border-status-offline/30 text-status-offline",
   queued: "border-status-warning/30 text-status-warning",
   dispatched: "border-status-online/30 text-status-online",
   failed: "border-status-offline/30 text-status-offline",
@@ -608,14 +616,14 @@ export const TasksTab = () => {
                                     {task.owner}
                                   </span>
                                 )}
-                                {task.dispatchStatus && (
+                                {(task.currentStatus || task.dispatchStatus) && (
                                   <span
                                     className={cn(
                                       "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
-                                      taskStatusTone[task.dispatchStatus] ?? "border-border text-muted-foreground",
+                                      taskStatusTone[task.currentStatus || task.dispatchStatus || ""] ?? "border-border text-muted-foreground",
                                     )}
                                   >
-                                    {taskStatusLabel[task.dispatchStatus] ?? task.dispatchStatus}
+                                    {taskStatusLabel[task.currentStatus || task.dispatchStatus || ""] ?? (task.currentStatus || task.dispatchStatus)}
                                   </span>
                                 )}
                               </div>

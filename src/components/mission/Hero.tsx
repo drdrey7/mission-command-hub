@@ -16,10 +16,14 @@ export const Hero = () => {
     { label: "Eventos 24h", value: "—" },
     { label: "IPs banidos", value: "—" },
   ]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([getAgents(), getTasks(), getAuditTrail(500), getVpsNodes()]).then(
-      ([agents, tasks, activity, vps]) => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [agents, tasks, activity, vps] = await Promise.all([getAgents(), getTasks(), getAuditTrail(500), getVpsNodes()]);
+        if (cancelled) return;
         const active = agents.filter((a) => a.status === "em_voo" || a.status === "taxiing").length;
         const banned = vps[0]?.banned ?? 0;
         setKpis([
@@ -28,8 +32,21 @@ export const Hero = () => {
           { label: "Eventos 24h", value: String(activity.length), tone: activity.length > 100 ? "warning" : "default" },
           { label: "IPs banidos", value: String(banned), tone: banned > 0 ? "danger" : "default" },
         ]);
+        setError(null);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Falha ao carregar KPI");
       }
-    );
+    };
+
+    void load();
+    const interval = window.setInterval(() => {
+      void load();
+    }, 10_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
   }, []);
 
   return (
@@ -60,6 +77,12 @@ export const Hero = () => {
           })}
         </div>
       </div>
+
+      {error && (
+        <div className="relative mt-4 rounded-xl border border-status-offline/30 bg-status-offline/5 px-4 py-3 text-sm text-status-offline">
+          {error}
+        </div>
+      )}
     </section>
   );
 };

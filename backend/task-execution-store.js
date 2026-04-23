@@ -47,12 +47,13 @@ function ensureTaskRecord(store, taskId, base = {}) {
       title: base.title || '',
       currentText: base.currentText || base.title || '',
       currentSection: base.currentSection || null,
-      currentStatus: base.currentStatus || 'standby',
+      currentStatus: base.currentStatus || 'idle',
       currentAgentId: base.currentAgentId || null,
       currentSessionKey: base.currentSessionKey || null,
       currentSessionId: base.currentSessionId || null,
       currentRunId: base.currentRunId || null,
       currentConclusion: base.currentConclusion || null,
+      boardSection: base.boardSection || null,
       createdAt: base.createdAt || isoNow(),
       updatedAt: base.updatedAt || isoNow(),
       deletedAt: base.deletedAt || null,
@@ -71,6 +72,7 @@ function ensureTaskRecord(store, taskId, base = {}) {
   if (base.currentSessionId !== undefined) record.currentSessionId = base.currentSessionId;
   if (base.currentRunId !== undefined) record.currentRunId = base.currentRunId;
   if (base.currentConclusion !== undefined) record.currentConclusion = base.currentConclusion;
+  if (base.boardSection !== undefined) record.boardSection = base.boardSection;
   if (base.deletedAt !== undefined) record.deletedAt = base.deletedAt;
   record.updatedAt = isoNow();
   return record;
@@ -107,6 +109,7 @@ function appendTaskRun(store, taskId, run) {
   if (run.runId !== undefined) record.currentRunId = run.runId;
   if (run.sessionId !== undefined) record.currentSessionId = run.sessionId;
   if (run.conclusion !== undefined) record.currentConclusion = run.conclusion;
+  if (run.boardSection !== undefined) record.boardSection = run.boardSection;
   record.updatedAt = isoNow();
   return record;
 }

@@ -200,6 +200,48 @@ export interface TasksResponse {
   raw?: string;
 }
 
+export interface OpenClawStateAgent {
+  key: string;
+  id?: string;
+  name: string;
+  role?: string | null;
+  status: string;
+  executionStatus?: string | null;
+  sessions?: number;
+  sessionCount?: number;
+  lastActivity?: string | null;
+  lastActivityAt?: string | null;
+  currentTask?: string | null;
+  currentTaskId?: string | null;
+  currentSessionKey?: string | null;
+  currentSessionId?: string | null;
+  currentRunId?: string | null;
+  source?: string | null;
+}
+
+export interface OpenClawStateActivity {
+  id: string;
+  type?: string;
+  text: string;
+  source: string;
+  timestamp?: string | null;
+  severity?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  runId?: string | null;
+}
+
+export interface OpenClawState {
+  ok: boolean;
+  generatedAt?: string;
+  agents: OpenClawStateAgent[];
+  sessions: Array<Record<string, unknown>>;
+  activity: OpenClawStateActivity[];
+  errors?: string[];
+  warnings?: string[];
+  sources?: Record<string, unknown>;
+}
+
 export interface TaskMutationInput {
   section: TaskSectionKey;
   text: string;
@@ -298,15 +340,20 @@ const delay = <T,>(v: T, ms = 250) => new Promise<T>((r) => setTimeout(() => r(v
 /* Agents */
 export const getAgents = async (): Promise<Agent[]> => {
   if (USE_MOCK) return delay(mockAgents);
-  const d = await http<any>("/api/agents");
+  const d = await http<OpenClawState>("/api/state");
   console.log("[getAgents] raw data:", d);
-  return d.agents.map((a: any) => ({
-    key: a.name as AgentKey,
-    name: a.name.charAt(0).toUpperCase() + a.name.slice(1),
-    role: "Agent",
-    status: a.lastActivity && new Date(a.lastActivity) > new Date(Date.now() - 3600000) ? "active" : "standby",
-    sessions: a.sessionCount,
-    lastActivity: a.lastActivity,
+  if ((!d.agents || d.agents.length === 0) && d.errors?.length) {
+    throw new Error(d.errors.join(" · "));
+  }
+  return (d.agents || []).map((a: OpenClawStateAgent) => ({
+    key: a.key as AgentKey,
+    name: a.name,
+    role: a.role || "Agent",
+    status: a.status as Agent["status"],
+    sessions: a.sessionCount ?? a.sessions ?? 0,
+    lastActivity: a.lastActivity ?? a.lastActivityAt ?? "—",
+    flightStartedAt: undefined,
+    currentTask: a.currentTask ?? undefined,
   }));
 };
 
@@ -452,16 +499,18 @@ export const vpsAction = (id: string, action: VpsAction) =>
 /* Audit */
 export const getAuditTrail = (limit = 50): Promise<ActivityEvent[]> => {
   if (USE_MOCK) return delay(mockActivity);
-  return http<any[]>(`/api/activity?limit=${limit}`).then(data => {
+  return http<OpenClawState>(`/api/state?activityLimit=${limit}&sessionLimit=20`).then(data => {
     console.log("[getAuditTrail] raw data:", data);
-    // Backend returns [{"type":"log","text":"Ativou protocolo...","source":"CEO","timestamp":"06:33:43"}]
-    return data.map((e: any) => ({
+    const items = Array.isArray(data.activity) ? data.activity : [];
+    if (items.length === 0 && data.errors?.length) {
+      throw new Error(data.errors.join(" · "));
+    }
+    return items.map((e) => ({
       id: `audit-${Date.now()}-${Math.random()}`,
       type: e.type || "log",
-      text: e.text || e.message || "",
+      text: e.text || "",
       source: e.source || "sistema",
-      timestamp: e.timestamp || new Date().toISOString(),
-      severity: e.severity || "info",
+      time: e.timestamp || new Date().toISOString(),
     }));
   });
 };
