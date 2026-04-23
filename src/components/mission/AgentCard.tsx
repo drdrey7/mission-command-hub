@@ -32,9 +32,9 @@ export const AgentCard = ({ agent }: { agent: Agent }) => {
 
       <div className="relative mt-3 flex items-center justify-between border-t border-border/60 pt-3 text-xs">
         <span className="text-muted-foreground">
-          <span className="font-mono font-semibold text-foreground tabular-nums">{agent.sessions}</span> sessões
+          <span className="font-mono font-semibold text-foreground tabular-nums">{agent.sessions ?? "N/A"}</span> sessões
         </span>
-        <span className="font-mono text-muted-foreground tabular-nums">{agent.lastActivity}</span>
+        <span className="font-mono text-muted-foreground tabular-nums">{agent.lastActivity || "N/A"}</span>
       </div>
 
       {isLit && (

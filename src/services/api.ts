@@ -262,3 +262,33 @@ export const sendChat = (agent: AgentKey, messages: ChatMessage[]) =>
     method: "POST",
     body: JSON.stringify({ messages }),
   });
+
+/* ----------------- Memory ----------------- */
+export interface MemoryEntry {
+  agent: AgentKey;
+  date: string; // YYYY-MM-DD
+  content: string;
+}
+
+interface RawMemory {
+  agent: string;
+  date: string;
+  content: string;
+}
+
+export const getMemory = async (): Promise<MemoryEntry[]> => {
+  try {
+    const data = await http<{ entries: RawMemory[] }>("/memory");
+    const known: AgentKey[] = ["comandante", "cyber", "flow", "ledger"];
+    return (data.entries || [])
+      .filter((e) => known.includes(e.agent as AgentKey))
+      .map((e) => ({
+        agent: e.agent as AgentKey,
+        date: e.date,
+        content: e.content || "",
+      }))
+      .sort((a, b) => b.date.localeCompare(a.date));
+  } catch {
+    return [];
+  }
+};

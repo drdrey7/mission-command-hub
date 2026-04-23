@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Server, Cpu, HardDrive, MemoryStick, FileText, Shield, ClipboardList } from "lucide-react";
+import { Server, Cpu, HardDrive, MemoryStick, FileText, Shield, ClipboardList, Brain } from "lucide-react";
 import type { VpsNode } from "@/data/mockData";
 import { AuditTrail } from "./AuditTrail";
 import { VpsActions } from "./VpsActions";
 import { Fail2banPanel } from "./Fail2banPanel";
 import { TasksTab } from "./TasksTab";
+import { MemoryTab } from "./MemoryTab";
 import { getVpsNodes } from "@/services/api";
 import { cn } from "@/lib/utils";
 
@@ -31,10 +32,11 @@ export const OperationalTabs = ({ value, onValueChange }: Props) => {
   return (
     <section className="panel p-4 sm:p-5">
       <Tabs value={value} onValueChange={onValueChange} className="w-full">
-        <TabsList className="grid w-full grid-cols-2 bg-surface-2/60 sm:w-auto sm:inline-flex sm:grid-cols-4">
+        <TabsList className="grid w-full grid-cols-3 bg-surface-2/60 sm:w-auto sm:inline-flex sm:grid-cols-5">
           <TabsTrigger value="tasks" className="gap-1.5 text-xs"><ClipboardList className="h-3.5 w-3.5" />Tarefas</TabsTrigger>
           <TabsTrigger value="vps" className="gap-1.5 text-xs"><Server className="h-3.5 w-3.5" />VPS</TabsTrigger>
           <TabsTrigger value="fail2ban" className="gap-1.5 text-xs"><Shield className="h-3.5 w-3.5" />Fail2ban</TabsTrigger>
+          <TabsTrigger value="memory" className="gap-1.5 text-xs"><Brain className="h-3.5 w-3.5" />Memory</TabsTrigger>
           <TabsTrigger value="audit" className="gap-1.5 text-xs"><FileText className="h-3.5 w-3.5" />Audit</TabsTrigger>
         </TabsList>
 
@@ -112,6 +114,9 @@ export const OperationalTabs = ({ value, onValueChange }: Props) => {
 
         {/* FAIL2BAN */}
         <TabsContent value="fail2ban" className="mt-5"><Fail2banPanel /></TabsContent>
+
+        {/* MEMORY */}
+        <TabsContent value="memory" className="mt-5"><MemoryTab /></TabsContent>
 
         {/* AUDIT */}
         <TabsContent value="audit" className="mt-5"><AuditTrail /></TabsContent>
