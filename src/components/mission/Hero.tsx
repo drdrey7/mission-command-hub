@@ -24,7 +24,7 @@ export const Hero = () => {
         const banned = vps[0]?.banned ?? 0;
         setKpis([
           { label: "Agentes ativos", value: String(active).padStart(2, "0") },
-          { label: "Tarefas", value: String(tasks.length).padStart(2, "0") },
+          { label: "Tarefas", value: String(tasks.summary.total).padStart(2, "0") },
           { label: "Eventos 24h", value: String(activity.length), tone: activity.length > 100 ? "warning" : "default" },
           { label: "IPs banidos", value: String(banned), tone: banned > 0 ? "danger" : "default" },
         ]);
