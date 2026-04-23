@@ -3,15 +3,19 @@ import type { Agent } from "@/data/mockData";
 import { StatusBadge } from "./StatusBadge";
 import { AgentBadge } from "./AgentBadge";
 
-const tone: Record<Agent["key"], { color: string; glow: string; bg: string }> = {
-  comandante: { color: "text-agent-comandante", glow: "shadow-[0_0_50px_-10px_hsl(var(--agent-comandante)/0.5)]", bg: "bg-agent-comandante/10" },
-  cyber:      { color: "text-agent-cyber",      glow: "shadow-[0_0_50px_-10px_hsl(var(--agent-cyber)/0.5)]",      bg: "bg-agent-cyber/10" },
-  flow:       { color: "text-agent-flow",       glow: "shadow-[0_0_50px_-10px_hsl(var(--agent-flow)/0.5)]",       bg: "bg-agent-flow/10" },
-  ledger:     { color: "text-agent-ledger",     glow: "shadow-[0_0_50px_-10px_hsl(var(--agent-ledger)/0.5)]",     bg: "bg-agent-ledger/10" },
-};
+const tone: Partial<Record<Agent["key"], { color: string; glow: string; bg: string }>> =
+  {
+    commander: { color: "text-gray-400", glow: "", bg: "bg-gray-400/10" },
+    comandante: { color: "text-agent-comandante", glow: "shadow-[0_0_50px_-10px_hsl(var(--agent-comandante)/0.5)]", bg: "bg-agent-comandante/10" },
+    cyber:      { color: "text-agent-cyber",      glow: "shadow-[0_0_50px_-10px_hsl(var(--agent-cyber)/0.5)]",      bg: "bg-agent-cyber/10" },
+    flow:       { color: "text-agent-flow",       glow: "shadow-[0_0_50px_-10px_hsl(var(--agent-flow)/0.5)]",       bg: "bg-agent-flow/10" },
+    ledger:     { color: "text-agent-ledger",     glow: "shadow-[0_0_50px_-10px_hsl(var(--agent-ledger)/0.5)]",     bg: "bg-agent-ledger/10" },
+  };
+
+const defaultCfg = { color: "text-muted-foreground", glow: "", bg: "bg-muted/20" };
 
 export const AgentCard = ({ agent }: { agent: Agent }) => {
-  const cfg = tone[agent.key];
+  const cfg = tone[agent.key as keyof typeof tone] || defaultCfg;
   const inFlight = agent.status === "em_voo";
   const isLit = inFlight || agent.status === "taxiing";
 

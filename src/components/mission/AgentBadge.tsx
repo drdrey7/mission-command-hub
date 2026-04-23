@@ -3,7 +3,7 @@ import { Crown, Shield, Workflow, BookOpen, Plane, LucideIcon } from "lucide-rea
 import { cn } from "@/lib/utils";
 import { AgentKey } from "@/data/mockData";
 
-const map: Record<AgentKey, { icon: LucideIcon; color: string; bg: string; ring: string }> = {
+const map: Partial<Record<AgentKey, { icon: LucideIcon; color: string; bg: string; ring: string }>> = {
   comandante: {
     icon: Crown,
     color: "text-agent-comandante",
@@ -30,6 +30,13 @@ const map: Record<AgentKey, { icon: LucideIcon; color: string; bg: string; ring:
   },
 };
 
+const defaultAgentCfg = {
+  icon: Shield,
+  color: "text-muted-foreground",
+  bg: "bg-muted/20",
+  ring: "border-border",
+};
+
 const sizeMap = {
   sm: { box: "h-10 w-10", icon: "h-5 w-5", orbit: 22, plane: "h-2.5 w-2.5" },
   md: { box: "h-12 w-12", icon: "h-6 w-6", orbit: 28, plane: "h-3 w-3" },
@@ -44,7 +51,7 @@ interface Props {
 }
 
 export const AgentBadge = ({ agent, working = false, size = "md", className }: Props) => {
-  const cfg = map[agent];
+  const cfg = map[agent] || defaultAgentCfg;
   const sz = sizeMap[size];
   const Icon = cfg.icon;
 
