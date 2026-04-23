@@ -80,15 +80,21 @@ export const getTasks = (): Promise<Task[]> => {
     // Backend returns {"raw":"## Standby\n- task1\n## In Progress\n- task2..."}
     const raw = data.raw || "";
     const tasks: Task[] = [];
-    let section = "standby";
+    let section: Task["column"] = "standby";
     raw.split("\n").forEach(line => {
       const trimmed = line.trim();
       if (trimmed.startsWith("##")) {
-        section = trimmed.replace("##", "").trim().toLowerCase();
+        const raw_section = trimmed.replace("##", "").trim().toLowerCase();
+        // Map section names to kanban column values
+        section = raw_section === "in progress" ? "in_progress" :
+                  raw_section === "completed" ? "done" :
+                  raw_section === "standby" ? "standby" :
+                  raw_section === "done" ? "done" :
+                  raw_section === "blocked" ? "blocked" : "standby"; // safe fallback
       } else if (trimmed.startsWith("-")) {
         const title = trimmed.substring(1).trim();
         const prio: Task["priority"] = title.toLowerCase().includes("urgente") ? "alta" : title.toLowerCase().includes("medio") ? "média" : "baixa";
-        tasks.push({ id: `t-${tasks.length + 1}`, title, agent: "comandante", priority: prio, time: "agora" });
+        tasks.push({ id: `t-${tasks.length + 1}`, title, agent: "comandante", priority: prio, time: "agora", column: section });
       }
     });
     console.log("[getTasks] parsed tasks:", tasks);
@@ -125,11 +131,13 @@ export const getVpsNodes = (): Promise<VpsNode[]> => {
       id: "vps-1",
       name: "openclaw-vps",
       region: "Hetzner · Helsinki",
-      cpu: parseFloat(data.cpu) || 0,
-      ram: (() => { const [u,t] = data.ram.split("/").map((x:string) => parseFloat(x)); return Math.round((u/t)*100); })(),
-      disk: parseInt(data.disk) || 0,
-      status: "online" as const,
-      uptime: data.uptime.replace("up ",""),
+      cpu: typeof data.cpu === "number" ? data.cpu : parseFloat(data.cpu) || 0,
+      ram: typeof data.ram === "number" ? data.ram : (() => { const [u, t] = (data.ramRaw || "0/0").split("/").map((x: string) => parseFloat(x)); return Math.round((u / t) * 100); })(),
+      ramRaw: data.ramRaw || ((data.ram || "0/0").toString()),
+      disk: typeof data.disk === "number" ? data.disk : parseInt(data.disk) || 0,
+      status: data.ram !== "N/A" ? "online" as const : "offline" as const,
+      uptime: data.uptime ? data.uptime.replace("up ", "") : "N/A",
+      containers: Array.isArray(data.containers) ? data.containers : [],
     }];
   });
 };
@@ -268,3 +276,7 @@ export const getFail2banStats = (): Promise<Fail2banStats> =>
 export const unbanIp = (ip: string, jail: string) =>
   USE_MOCK ? delay({ ok: true, ip, jail }, 400)
            : http("/api/fail2ban/unban", { method: "POST", body: JSON.stringify({ ip, jail }) });
+
+/* Memory - N/A, no real backend endpoint */
+export interface MemoryEntry { id: string; agent: string; content: string; timestamp: string; }
+export const getMemory = async (): Promise<MemoryEntry[]> => [];

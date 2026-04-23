@@ -69,7 +69,7 @@ export const SystemStatusPanel = ({ onSeeFail2ban, onSeeVps }: Props) => {
       >
         <span className="flex items-center gap-2 text-muted-foreground">
           <Server className="h-3.5 w-3.5" />
-          {node ? `${node.containers.length} containers` : "—"}
+          {node?.containers?.length ?? 0} containers
         </span>
         <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
       </button>

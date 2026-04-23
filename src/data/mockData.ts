@@ -120,22 +120,30 @@ export const memoryEntries: MemoryEntry[] = [
   { id: "m6", agent: "ledger", key: "plano_de_contas", value: "SNC · 142 rubricas", updated: "há 3d" },
 ];
 
+export interface Container {
+  name: string;
+  status: string;
+  healthy: boolean;
+}
+
 export interface VpsNode {
   id: string;
   name: string;
   region: string;
   cpu: number;
   ram: number;
+  ramRaw: string;
   disk: number;
   status: "online" | "warning" | "offline";
   uptime: string;
+  containers: Container[];
 }
 
 export const vpsNodes: VpsNode[] = [
-  { id: "n1", name: "openclaw-edge-01", region: "Lisboa · PT", cpu: 34, ram: 58, disk: 41, status: "online", uptime: "62d 04h" },
-  { id: "n2", name: "openclaw-core-02", region: "Frankfurt · DE", cpu: 71, ram: 64, disk: 52, status: "online", uptime: "120d 11h" },
-  { id: "n3", name: "openclaw-data-03", region: "Amsterdam · NL", cpu: 22, ram: 47, disk: 78, status: "warning", uptime: "30d 02h" },
-  { id: "n4", name: "openclaw-ai-04", region: "Paris · FR", cpu: 88, ram: 81, disk: 33, status: "online", uptime: "8d 19h" },
+  { id: "n1", name: "openclaw-edge-01", region: "Lisboa · PT", cpu: 34, ram: 58, ramRaw: "2.1Gi/7.6Gi", disk: 41, status: "online", uptime: "62d 04h", containers: [{ name: "openclaw-gateway", status: "Up 62d", healthy: true }] },
+  { id: "n2", name: "openclaw-core-02", region: "Frankfurt · DE", cpu: 71, ram: 64, ramRaw: "4Gi/16Gi", disk: 52, status: "online", uptime: "120d 11h", containers: [{ name: "n8n", status: "Up 120d", healthy: true }] },
+  { id: "n3", name: "openclaw-data-03", region: "Amsterdam · NL", cpu: 22, ram: 47, ramRaw: "6Gi/12Gi", disk: 78, status: "warning", uptime: "30d 02h", containers: [] },
+  { id: "n4", name: "openclaw-ai-04", region: "Paris · FR", cpu: 88, ram: 81, ramRaw: "8Gi/10Gi", disk: 33, status: "online", uptime: "8d 19h", containers: [] },
 ];
 
 export interface Mission {
