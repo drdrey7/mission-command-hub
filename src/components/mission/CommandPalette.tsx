@@ -1,9 +1,16 @@
 import { useEffect, useState } from "react";
-import { Search, Plane, Brain, Server, Target, FileText, Shield, MessageSquare, Sun, Moon } from "lucide-react";
+import { Search, Server, FileText, Shield, MessageSquare, Sun, Moon, ClipboardList } from "lucide-react";
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/components/theme/ThemeProvider";
-import { agents } from "@/data/mockData";
+import type { AgentKey } from "@/data/mockData";
+
+const AGENTS: { key: AgentKey; name: string }[] = [
+  { key: "comandante", name: "Comandante" },
+  { key: "cyber", name: "Cyber" },
+  { key: "flow", name: "Flow" },
+  { key: "ledger", name: "Ledger" },
+];
 
 interface Props {
   onTabChange: (tab: string) => void;
@@ -48,18 +55,16 @@ export const CommandPalette = ({ onTabChange, onOpenChat }: Props) => {
           <CommandEmpty>Sem resultados.</CommandEmpty>
 
           <CommandGroup heading="Navegar">
-            <CommandItem onSelect={() => run(() => onTabChange("missions"))}><Target className="mr-2 h-4 w-4" /> Ir para Missões</CommandItem>
-            <CommandItem onSelect={() => run(() => onTabChange("tasks"))}><FileText className="mr-2 h-4 w-4" /> Ir para Tarefas</CommandItem>
+            <CommandItem onSelect={() => run(() => onTabChange("tasks"))}><ClipboardList className="mr-2 h-4 w-4" /> Ir para Tarefas</CommandItem>
             <CommandItem onSelect={() => run(() => onTabChange("vps"))}><Server className="mr-2 h-4 w-4" /> Ir para VPS</CommandItem>
             <CommandItem onSelect={() => run(() => onTabChange("fail2ban"))}><Shield className="mr-2 h-4 w-4" /> Ir para Fail2ban</CommandItem>
-            <CommandItem onSelect={() => run(() => onTabChange("memory"))}><Brain className="mr-2 h-4 w-4" /> Ir para Memória</CommandItem>
             <CommandItem onSelect={() => run(() => onTabChange("audit"))}><FileText className="mr-2 h-4 w-4" /> Ir para Audit</CommandItem>
           </CommandGroup>
 
           <CommandSeparator />
 
           <CommandGroup heading="Conversar com agente">
-            {agents.map((a) => (
+            {AGENTS.map((a) => (
               <CommandItem key={a.key} onSelect={() => run(() => onOpenChat(a.key))}>
                 <MessageSquare className="mr-2 h-4 w-4" /> Falar com {a.name}
               </CommandItem>
@@ -72,9 +77,6 @@ export const CommandPalette = ({ onTabChange, onOpenChat }: Props) => {
             <CommandItem onSelect={() => run(() => setTheme(theme === "dark" ? "light" : "dark"))}>
               {theme === "dark" ? <Sun className="mr-2 h-4 w-4" /> : <Moon className="mr-2 h-4 w-4" />}
               Mudar para tema {theme === "dark" ? "claro" : "escuro"}
-            </CommandItem>
-            <CommandItem onSelect={() => run(() => onTabChange("missions"))}>
-              <Plane className="mr-2 h-4 w-4" /> Lançar nova missão
             </CommandItem>
           </CommandGroup>
         </CommandList>

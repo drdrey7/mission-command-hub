@@ -5,9 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MessageSquare, Send, Loader2 } from "lucide-react";
 import { AgentBadge } from "./AgentBadge";
-import { agents, AgentKey } from "@/data/mockData";
-import { sendChat, ChatMessage } from "@/services/api";
+import type { AgentKey, Agent } from "@/data/mockData";
+import { sendChat, getAgents, ChatMessage } from "@/services/api";
 import { cn } from "@/lib/utils";
+
+const AGENT_KEYS: AgentKey[] = ["comandante", "cyber", "flow", "ledger"];
+const NAMES: Record<AgentKey, string> = {
+  comandante: "Comandante", cyber: "Cyber", flow: "Flow", ledger: "Ledger",
+};
 
 interface AgentChatProps {
   externalAgent?: string;
@@ -23,12 +28,16 @@ export const AgentChat = ({ externalAgent, open: openProp, onOpenChange }: Agent
     onOpenChange?.(v);
   };
   const [active, setActive] = useState<AgentKey>("comandante");
+  const [agents, setAgents] = useState<Agent[]>([]);
+
+  useEffect(() => { getAgents().then(setAgents); }, []);
 
   useEffect(() => {
-    if (externalAgent && (["comandante", "cyber", "flow", "ledger"] as const).includes(externalAgent as AgentKey)) {
+    if (externalAgent && AGENT_KEYS.includes(externalAgent as AgentKey)) {
       setActive(externalAgent as AgentKey);
     }
   }, [externalAgent]);
+
   const [byAgent, setByAgent] = useState<Record<AgentKey, ChatMessage[]>>({
     comandante: [], cyber: [], flow: [], ledger: [],
   });
@@ -57,7 +66,9 @@ export const AgentChat = ({ externalAgent, open: openProp, onOpenChange }: Agent
     }
   };
 
-  const agentInfo = agents.find((a) => a.key === active)!;
+  const agentInfo = agents.find((a) => a.key === active);
+  const agentName = agentInfo?.name ?? NAMES[active];
+  const inFlight = agentInfo?.status === "em_voo";
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -77,41 +88,36 @@ export const AgentChat = ({ externalAgent, open: openProp, onOpenChange }: Agent
           </SheetTitle>
         </SheetHeader>
 
-        {/* Agent selector */}
         <div className="flex gap-2 overflow-x-auto border-b border-border px-4 py-3">
-          {agents.map((a) => (
+          {AGENT_KEYS.map((k) => (
             <button
-              key={a.key}
-              onClick={() => setActive(a.key)}
+              key={k}
+              onClick={() => setActive(k)}
               className={cn(
                 "flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-smooth",
-                active === a.key
+                active === k
                   ? "border-primary bg-primary/10 text-foreground"
                   : "border-border bg-surface-2/40 text-muted-foreground hover:text-foreground"
               )}
             >
-              <AgentBadge agent={a.key} size="sm" />
-              <span>{a.name}</span>
+              <AgentBadge agent={k} size="sm" />
+              <span>{NAMES[k]}</span>
             </button>
           ))}
         </div>
 
-        {/* Header strip */}
         <div className="flex items-center gap-3 border-b border-border bg-surface-2/30 px-5 py-3">
-          <AgentBadge agent={active} working={agentInfo.status === "working"} />
+          <AgentBadge agent={active} working={inFlight} />
           <div>
-            <p className="font-display text-sm font-bold">{agentInfo.name}</p>
-            <p className="text-xs text-muted-foreground">{agentInfo.role}</p>
+            <p className="font-display text-sm font-bold">{agentName}</p>
+            <p className="text-xs text-muted-foreground">{agentInfo?.lastActivity ?? "—"}</p>
           </div>
         </div>
 
-        {/* Messages */}
         <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
           {messages.length === 0 && (
             <div className="rounded-xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
-              Inicia a conversa com <span className="text-foreground">{agentInfo.name}</span>.
-              <br />
-              Tenta: <em>"Qual o status da missão Skyhawk?"</em>
+              Inicia a conversa com <span className="text-foreground">{agentName}</span>.
             </div>
           )}
           {messages.map((m, i) => (
@@ -132,19 +138,18 @@ export const AgentChat = ({ externalAgent, open: openProp, onOpenChange }: Agent
           {loading && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
-              {agentInfo.name} a redigir…
+              {agentName} a redigir…
             </div>
           )}
         </div>
 
-        {/* Composer */}
         <div className="border-t border-border bg-surface-1/60 p-3">
           <div className="flex gap-2">
             <Input
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), send())}
-              placeholder={`Mensagem para ${agentInfo.name}…`}
+              placeholder={`Mensagem para ${agentName}…`}
               disabled={loading}
             />
             <Button onClick={send} disabled={loading || !input.trim()} size="icon">

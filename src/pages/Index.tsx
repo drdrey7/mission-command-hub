@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { TopBar } from "@/components/mission/TopBar";
 import { Hero } from "@/components/mission/Hero";
 import { AgentCard } from "@/components/mission/AgentCard";
@@ -7,13 +7,18 @@ import { SystemStatusPanel } from "@/components/mission/SystemStatusPanel";
 import { OperationalTabs } from "@/components/mission/OperationalTabs";
 import { CommandFooter } from "@/components/mission/CommandFooter";
 import { AgentChat } from "@/components/mission/AgentChat";
-import { agents } from "@/data/mockData";
+import { getAgents } from "@/services/api";
+import type { Agent } from "@/data/mockData";
 
 const Index = () => {
-  const [tab, setTab] = useState("missions");
+  const [tab, setTab] = useState("tasks");
   const [chatAgent, setChatAgent] = useState<string | undefined>();
   const [chatOpen, setChatOpen] = useState(false);
-  const activeCount = agents.filter((a) => a.status === "active" || a.status === "working").length;
+  const [agents, setAgents] = useState<Agent[]>([]);
+
+  useEffect(() => { getAgents().then(setAgents); }, []);
+
+  const activeCount = agents.filter((a) => a.status === "em_voo" || a.status === "taxiing").length;
 
   const goTab = (t: string) => {
     setTab(t);
@@ -35,7 +40,6 @@ const Index = () => {
         <div className="space-y-5 pb-8">
           <Hero />
 
-          {/* Agents */}
           <section>
             <div className="mb-3 flex items-end justify-between">
               <h2 className="font-display text-[11px] font-semibold uppercase tracking-[0.25em] text-muted-foreground">
@@ -46,17 +50,21 @@ const Index = () => {
               </span>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {agents.map((a) => (<AgentCard key={a.key} agent={a} />))}
+              {agents.length === 0 ? (
+                <p className="col-span-full rounded-xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
+                  Sem agentes disponíveis
+                </p>
+              ) : (
+                agents.map((a) => (<AgentCard key={a.key} agent={a} />))
+              )}
             </div>
           </section>
 
-          {/* Snapshot panels — só o essencial do dia a dia */}
           <section className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             <ActiveTasksPanel onSeeAll={() => goTab("tasks")} />
-            <SystemStatusPanel onSeeFail2ban={() => goTab("fail2ban")} />
+            <SystemStatusPanel onSeeFail2ban={() => goTab("fail2ban")} onSeeVps={() => goTab("vps")} />
           </section>
 
-          {/* Tabs operacionais */}
           <div id="ops" className="scroll-mt-20">
             <OperationalTabs value={tab} onValueChange={setTab} />
           </div>
