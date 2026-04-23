@@ -25,6 +25,203 @@ function run(cmd) {
   });
 }
 
+const TASKS_PATH = '/root/.openclaw/TASKS.md';
+const TASK_SECTION_META = {
+  standby: { label: 'Standby' },
+  inProgress: { label: 'In Progress' },
+  completed: { label: 'Completed' },
+};
+
+function normalizeTaskSection(value) {
+  if (!value) return null;
+  const normalized = String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ');
+
+  if (normalized === 'standby') return 'standby';
+  if (normalized === 'in progress' || normalized === 'inprogress') return 'inProgress';
+  if (normalized === 'completed' || normalized === 'complete' || normalized === 'done') return 'completed';
+  return null;
+}
+
+function sectionLabel(sectionKey, fallbackLabel) {
+  return TASK_SECTION_META[sectionKey]?.label || fallbackLabel || sectionKey;
+}
+
+function inferTaskOwner(text) {
+  if (!text) return null;
+  const match = text.match(/(?:^|[\s([{<])@?(comandante|cyber|flow|ledger|agentmail)\b/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
+function parseTaskLine(line, sectionKey, index) {
+  const match = line.match(/^\s*-\s+\[([xX ])\]\s+(.*)$/);
+  if (!match) return null;
+  const text = match[2].trim();
+  return {
+    id: `${sectionKey}-${index + 1}`,
+    text,
+    checked: match[1].toLowerCase() === 'x',
+    section: sectionKey,
+    owner: inferTaskOwner(text),
+  };
+}
+
+function parseTasksMarkdown(markdown) {
+  const lines = String(markdown || '').split(/\r?\n/);
+  const document = {
+    raw: String(markdown || ''),
+    preamble: [],
+    blocks: [],
+  };
+
+  let currentBlock = null;
+
+  const pushCurrentBlock = () => {
+    if (currentBlock) {
+      document.blocks.push(currentBlock);
+      currentBlock = null;
+    }
+  };
+
+  for (const line of lines) {
+    const headingMatch = line.match(/^##\s+(.*)$/);
+    if (headingMatch) {
+      pushCurrentBlock();
+      const headingText = headingMatch[1].trim();
+      currentBlock = {
+        headingLine: line,
+        headingText,
+        canonicalSection: normalizeTaskSection(headingText),
+        entries: [],
+      };
+      continue;
+    }
+
+    if (currentBlock) {
+      const taskIndex = currentBlock.entries.filter((entry) => entry.kind === 'task').length;
+      const task = currentBlock.canonicalSection ? parseTaskLine(line, currentBlock.canonicalSection, taskIndex) : null;
+      if (task) {
+        currentBlock.entries.push({
+          kind: 'task',
+          task,
+        });
+      } else {
+        currentBlock.entries.push({
+          kind: 'raw',
+          line,
+        });
+      }
+    } else {
+      document.preamble.push(line);
+    }
+  }
+
+  pushCurrentBlock();
+  return document;
+}
+
+function collectTasks(document) {
+  const summary = {
+    standby: 0,
+    inProgress: 0,
+    completed: 0,
+    total: 0,
+  };
+
+  const sections = {
+    standby: [],
+    inProgress: [],
+    completed: [],
+  };
+
+  for (const block of document.blocks) {
+    const sectionKey = block.canonicalSection;
+    if (!sectionKey || !sections[sectionKey]) continue;
+
+    for (const entry of block.entries) {
+      if (entry.kind !== 'task') continue;
+      sections[sectionKey].push({ ...entry.task });
+      summary[sectionKey] += 1;
+      summary.total += 1;
+    }
+  }
+
+  return { summary, sections };
+}
+
+function stringifyTaskLine(task) {
+  return `- [${task.checked ? 'x' : ' '}] ${task.text}`;
+}
+
+function createSectionBlock(sectionKey, headingText) {
+  return {
+    headingLine: `## ${headingText || sectionLabel(sectionKey)}`,
+    headingText: headingText || sectionLabel(sectionKey),
+    canonicalSection: sectionKey,
+    entries: [],
+  };
+}
+
+function findSectionBlock(document, sectionKey) {
+  return document.blocks.find((block) => block.canonicalSection === sectionKey) || null;
+}
+
+function findOrCreateSectionBlock(document, sectionKey) {
+  const existing = findSectionBlock(document, sectionKey);
+  if (existing) return existing;
+
+  const block = createSectionBlock(sectionKey);
+  document.blocks.push(block);
+  return block;
+}
+
+function rebuildMarkdown(document) {
+  const output = [...document.preamble];
+  while (output.length > 0 && output[0] === '') {
+    output.shift();
+  }
+
+  for (const block of document.blocks) {
+    if (output.length > 0 && output[output.length - 1] !== '') {
+      output.push('');
+    }
+
+    output.push(block.headingLine || `## ${block.headingText}`);
+
+    for (const entry of block.entries) {
+      if (entry.kind === 'task') {
+        output.push(stringifyTaskLine(entry.task));
+      } else {
+        output.push(entry.line);
+      }
+    }
+  }
+
+  return output.join('\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+/, '').replace(/\s+$/, '') + '\n';
+}
+
+function loadTasksDocument() {
+  if (!fs.existsSync(TASKS_PATH)) {
+    return parseTasksMarkdown('');
+  }
+
+  const markdown = fs.readFileSync(TASKS_PATH, 'utf8');
+  return parseTasksMarkdown(markdown);
+}
+
+function saveTasksDocument(document) {
+  fs.writeFileSync(TASKS_PATH, rebuildMarkdown(document));
+}
+
+function findTaskEntry(block, text) {
+  const idx = block.entries.findIndex((entry) => entry.kind === 'task' && entry.task.text === text);
+  if (idx === -1) return null;
+  return { index: idx, entry: block.entries[idx] };
+}
+
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 app.get('/api/vps', async (req, res) => {
@@ -120,10 +317,9 @@ app.get('/api/vps', async (req, res) => {
 
 app.get('/api/tasks', (req, res) => {
   try {
-    const path = '/root/.openclaw/TASKS.md';
-    if (!fs.existsSync(path)) return res.json({ tasks: [] });
-    const data = fs.readFileSync(path, 'utf8');
-    res.json({ raw: data });
+    const document = loadTasksDocument();
+    const { summary, sections } = collectTasks(document);
+    res.json({ summary, sections, raw: document.raw });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -134,59 +330,23 @@ app.post('/api/tasks', (req, res) => {
     if (!section || !text) {
       return res.status(400).json({ error: 'Section and text are required' });
     }
-    const validSections = ['Standby', 'In Progress', 'Blocked', 'Done'];
-    if (!validSections.includes(section)) {
+    const normalizedSection = normalizeTaskSection(section);
+    if (!normalizedSection) {
       return res.status(400).json({ error: 'Invalid section' });
     }
-    const path = '/root/.openclaw/TASKS.md';
-    let data = '';
-    if (fs.existsSync(path)) {
-      data = fs.readFileSync(path, 'utf8');
-    }
-    // Ensure the section exists
-    const sectionHeader = `## ${section}`;
-    if (!data.includes(sectionHeader)) {
-      // If file is empty, just add the section and task
-      if (data.trim() === '') {
-        data = `${sectionHeader}\n\n- [ ] ${text}\n`;
-      } else {
-        // Append section and task
-        data += `\n\n${sectionHeader}\n\n- [ ] ${text}\n`;
-      }
-    } else {
-      // Find the section and append the task after the last task in that section
-      const lines = data.split('\n');
-      let inSection = false;
-      let lastTaskIndex = -1;
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (line.startsWith('## ')) {
-          const currentSection = line.substring(3).trim();
-          if (currentSection === section) {
-            inSection = true;
-          } else if (inSection) {
-            // We've moved to a new section, so stop looking
-            break;
-          }
-        }
-        if (inSection && line.startsWith('- [ ')) {
-          lastTaskIndex = i;
-        }
-      }
-      if (lastTaskIndex !== -1) {
-        // Insert the new task after the last task in the section
-        lines.splice(lastTaskIndex + 1, 0, `- [ ] ${text}`);
-        data = lines.join('\n');
-      } else {
-        // No tasks in section yet, add after the section header
-        const headerIndex = lines.findIndex(line => line.trim() === sectionHeader);
-        if (headerIndex !== -1) {
-          lines.splice(headerIndex + 1, 0, '', `- [ ] ${text}`);
-          data = lines.join('\n');
-        }
-      }
-    }
-    fs.writeFileSync(path, data);
+    const document = loadTasksDocument();
+    const sectionBlock = findOrCreateSectionBlock(document, normalizedSection);
+    sectionBlock.entries.push({
+      kind: 'task',
+      task: {
+        id: `${normalizedSection}-${sectionBlock.entries.filter((entry) => entry.kind === 'task').length + 1}`,
+        text: String(text).trim(),
+        checked: false,
+        section: normalizedSection,
+        owner: inferTaskOwner(String(text).trim()),
+      },
+    });
+    saveTasksDocument(document);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -200,30 +360,30 @@ app.delete('/api/tasks', (req, res) => {
     if (!section || !text) {
       return res.status(400).json({ error: 'Section and text are required' });
     }
-    const path = '/root/.openclaw/TASKS.md';
-    if (!fs.existsSync(path)) {
+    const normalizedSection = normalizeTaskSection(section);
+    if (!normalizedSection) {
+      return res.status(400).json({ error: 'Invalid section' });
+    }
+    if (!fs.existsSync(TASKS_PATH)) {
       return res.status(404).json({ error: 'Tasks file not found' });
     }
-    let data = fs.readFileSync(path, 'utf8');
-    const lines = data.split('\n');
-    let inSection = false;
-    const newLines = [];
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (line.startsWith('## ')) {
-        const currentSection = line.substring(3).trim();
-        inSection = (currentSection === section);
-        newLines.push(line);
-        continue;
-      }
-      if (inSection && line.trim() === `- [ ] ${text}`) {
-        // Skip this line (delete the task)
-        continue;
-      }
-      newLines.push(line);
+    const document = loadTasksDocument();
+    let removed = false;
+
+    for (const block of document.blocks) {
+      if (block.canonicalSection !== normalizedSection) continue;
+      const taskRef = findTaskEntry(block, String(text).trim());
+      if (!taskRef) continue;
+      block.entries.splice(taskRef.index, 1);
+      removed = true;
+      break;
     }
-    data = newLines.join('\n');
-    fs.writeFileSync(path, data);
+
+    if (!removed) {
+      return res.status(404).json({ error: 'Task not found in section' });
+    }
+
+    saveTasksDocument(document);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -237,65 +397,38 @@ app.patch('/api/tasks', (req, res) => {
     if (!section || !text || !newSection) {
       return res.status(400).json({ error: 'Section, text, and newSection are required' });
     }
-    const validSections = ['Standby', 'In Progress', 'Blocked', 'Done'];
-    if (!validSections.includes(section) || !validSections.includes(newSection)) {
+    const sourceSection = normalizeTaskSection(section);
+    const targetSection = normalizeTaskSection(newSection);
+    if (!sourceSection || !targetSection) {
       return res.status(400).json({ error: 'Invalid section' });
     }
-    const path = '/root/.openclaw/TASKS.md';
-    if (!fs.existsSync(path)) {
+    if (!fs.existsSync(TASKS_PATH)) {
       return res.status(404).json({ error: 'Tasks file not found' });
     }
-    let data = fs.readFileSync(path, 'utf8');
-    const lines = data.split('\n');
-    let inSection = false;
-    let taskLineIndex = -1;
-    // Find the task to move
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (line.startsWith('## ')) {
-        const currentSection = line.substring(3).trim();
-        inSection = (currentSection === section);
-        continue;
-      }
-      if (inSection && line.trim() === `- [ ] ${text}`) {
-        taskLineIndex = i;
-        break;
-      }
+    const document = loadTasksDocument();
+    let movedTask = null;
+
+    for (const block of document.blocks) {
+      if (block.canonicalSection !== sourceSection) continue;
+      const taskRef = findTaskEntry(block, String(text).trim());
+      if (!taskRef) continue;
+      movedTask = taskRef.entry.task;
+      block.entries.splice(taskRef.index, 1);
+      break;
     }
-    if (taskLineIndex === -1) {
+
+    if (!movedTask) {
       return res.status(404).json({ error: 'Task not found in section' });
     }
-    // Remove the task from the current section
-    lines.splice(taskLineIndex, 1);
-    // Now find the new section and insert the task after the last task in that section
-    let inNewSection = false;
-    let lastTaskIndexInNewSection = -1;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (line.startsWith('## ')) {
-        const currentSection = line.substring(3).trim();
-        inNewSection = (currentSection === newSection);
-        continue;
-      }
-      if (inNewSection && line.startsWith('- [ ')) {
-        lastTaskIndexInNewSection = i;
-      }
-    }
-    if (lastTaskIndexInNewSection !== -1) {
-      // Insert after the last task in the new section
-      lines.splice(lastTaskIndexInNewSection + 1, 0, `- [ ] ${text}`);
-    } else {
-      // No tasks in new section yet, find the section header and insert after it
-      const headerIndex = lines.findIndex(line => line.trim() === `## ${newSection}`);
-      if (headerIndex !== -1) {
-        lines.splice(headerIndex + 1, 0, '', `- [ ] ${text}`);
-      } else {
-        // Section doesn't exist, add it at the end
-        lines.push(`\n## ${newSection}\n\n- [ ] ${text}`);
-      }
-    }
-    data = lines.join('\n');
-    fs.writeFileSync(path, data);
+
+    movedTask.section = targetSection;
+    const targetBlock = findOrCreateSectionBlock(document, targetSection);
+    targetBlock.entries.push({
+      kind: 'task',
+      task: movedTask,
+    });
+
+    saveTasksDocument(document);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
