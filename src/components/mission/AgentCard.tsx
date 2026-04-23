@@ -12,15 +12,16 @@ const tone: Record<Agent["key"], { color: string; glow: string; bg: string }> = 
 
 export const AgentCard = ({ agent }: { agent: Agent }) => {
   const cfg = tone[agent.key];
+  const isActive = agent.status === "active" || agent.status === "working";
   const isWorking = agent.status === "working";
-  const isLit = isWorking || agent.status === "active";
+  const isLit = isActive;
 
   return (
     <div className={cn("panel group relative overflow-hidden p-4 transition-smooth hover:-translate-y-0.5", isLit && cfg.glow)}>
       <div className={cn("pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full blur-2xl opacity-60", cfg.bg)} />
 
       <div className="relative flex items-center justify-between">
-        <AgentBadge agent={agent.key} working={isWorking} size="md" />
+        <AgentBadge agent={agent.key} working={isActive} size="md" />
         <StatusBadge status={agent.status} />
       </div>
 
