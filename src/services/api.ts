@@ -45,6 +45,12 @@ export interface TaskItem {
   checked: boolean;
   section: TaskSectionKey;
   owner: string | null;
+  taskId?: string | null;
+  agentId?: string | null;
+  sessionKey?: string | null;
+  runId?: string | null;
+  dispatchStatus?: string | null;
+  conclusion?: string | null;
 }
 
 export interface TasksSummary {
@@ -63,6 +69,40 @@ export interface TasksResponse {
 export interface TaskMutationInput {
   section: TaskSectionKey;
   text: string;
+  taskId?: string | null;
+}
+
+export interface TaskEditInput extends TaskMutationInput {
+  newText: string;
+}
+
+export interface GenerateTaskPromptInput {
+  idea: string;
+  agentId?: string;
+  section: TaskSectionKey;
+  model?: string;
+}
+
+export interface GenerateTaskPromptResponse {
+  ok: boolean;
+  prompt: string;
+  transport?: string | null;
+  provider?: string | null;
+  model?: string | null;
+}
+
+export interface DispatchTaskInput {
+  idea: string;
+  prompt: string;
+  agentId: string;
+  section: TaskSectionKey;
+  taskId?: string | null;
+}
+
+export interface DispatchTaskResponse {
+  ok: boolean;
+  task: TaskItem;
+  dispatch: unknown;
 }
 
 export const TASK_SECTIONS: { key: TaskSectionKey; label: string; apiLabel: string }[] = [
@@ -142,12 +182,36 @@ export const getTasks = (): Promise<TasksResponse> => {
   return http<TasksResponse>("/api/tasks");
 };
 
+export const generateTaskPrompt = (input: GenerateTaskPromptInput) =>
+  http<GenerateTaskPromptResponse>("/api/tasks/generate-prompt", {
+    method: "POST",
+    body: JSON.stringify({
+      idea: input.idea,
+      agentId: input.agentId,
+      section: taskSectionApiLabel(input.section),
+      model: input.model,
+    }),
+  });
+
+export const dispatchTask = (input: DispatchTaskInput) =>
+  http<DispatchTaskResponse>("/api/tasks/dispatch", {
+    method: "POST",
+    body: JSON.stringify({
+      idea: input.idea,
+      prompt: input.prompt,
+      agentId: input.agentId,
+      section: taskSectionApiLabel(input.section),
+      taskId: input.taskId,
+    }),
+  });
+
 export const createTask = (input: TaskMutationInput) =>
   http<{ success: boolean }>("/api/tasks", {
     method: "POST",
     body: JSON.stringify({
       section: taskSectionApiLabel(input.section),
       text: input.text,
+      taskId: input.taskId,
     }),
   });
 
@@ -157,6 +221,7 @@ export const deleteTask = (input: TaskMutationInput) =>
     body: JSON.stringify({
       section: taskSectionApiLabel(input.section),
       text: input.text,
+      taskId: input.taskId,
     }),
   });
 
@@ -166,7 +231,19 @@ export const moveTask = (input: TaskMutationInput, newSection: TaskSectionKey) =
     body: JSON.stringify({
       section: taskSectionApiLabel(input.section),
       text: input.text,
+      taskId: input.taskId,
       newSection: taskSectionApiLabel(newSection),
+    }),
+  });
+
+export const editTask = (input: TaskEditInput) =>
+  http<{ success: boolean }>("/api/tasks", {
+    method: "PATCH",
+    body: JSON.stringify({
+      section: taskSectionApiLabel(input.section),
+      text: input.text,
+      taskId: input.taskId,
+      newText: input.newText,
     }),
   });
 
