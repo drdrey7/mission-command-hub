@@ -341,6 +341,7 @@ app.get('/api/agents', async (req, res) => {
       }
       agents.push({
         id,
+        name: id,
         sessionCount,
         lastActivity: lastActivity || null
       });
