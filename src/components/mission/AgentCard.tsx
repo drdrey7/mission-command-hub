@@ -21,7 +21,7 @@ export const AgentCard = ({ agent }: { agent: Agent }) => {
       <div className={cn("pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full blur-2xl opacity-60", cfg.bg)} />
 
       <div className="relative flex items-center justify-between">
-        <AgentBadge agent={agent.key} working={isWorking} size="md" />
+        <AgentBadge agent={agent.key} working={isActive} size="md" />
         <StatusBadge status={agent.status} />
       </div>
 
