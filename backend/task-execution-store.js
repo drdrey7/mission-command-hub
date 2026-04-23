@@ -50,8 +50,8 @@ function ensureTaskRecord(store, taskId, base = {}) {
       currentStatus: base.currentStatus || 'standby',
       currentAgentId: base.currentAgentId || null,
       currentSessionKey: base.currentSessionKey || null,
-      currentRunId: base.currentRunId || null,
       currentSessionId: base.currentSessionId || null,
+      currentRunId: base.currentRunId || null,
       currentConclusion: base.currentConclusion || null,
       createdAt: base.createdAt || isoNow(),
       updatedAt: base.updatedAt || isoNow(),
@@ -68,8 +68,8 @@ function ensureTaskRecord(store, taskId, base = {}) {
   if (base.currentStatus !== undefined && base.currentStatus !== null) record.currentStatus = base.currentStatus;
   if (base.currentAgentId !== undefined) record.currentAgentId = base.currentAgentId;
   if (base.currentSessionKey !== undefined) record.currentSessionKey = base.currentSessionKey;
-  if (base.currentRunId !== undefined) record.currentRunId = base.currentRunId;
   if (base.currentSessionId !== undefined) record.currentSessionId = base.currentSessionId;
+  if (base.currentRunId !== undefined) record.currentRunId = base.currentRunId;
   if (base.currentConclusion !== undefined) record.currentConclusion = base.currentConclusion;
   if (base.deletedAt !== undefined) record.deletedAt = base.deletedAt;
   record.updatedAt = isoNow();

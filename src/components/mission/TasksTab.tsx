@@ -137,7 +137,7 @@ export const TasksTab = () => {
       setDetail(response);
       const nextInstruction = response.task.currentText || response.task.text || "";
       setDetailInstruction(nextInstruction);
-      setDetailPrompt(response.task.sessionKey ? (response.currentRun?.prompt || nextInstruction) : nextInstruction);
+      setDetailPrompt((response.task.sessionKey || response.task.sessionId) ? (response.currentRun?.prompt || nextInstruction) : nextInstruction);
       setDetailAgent(response.task.agentId || response.currentRun?.agentId || selectedAgent || agents[0]?.key || "");
       setDetailOpen(true);
     } catch (err) {
@@ -292,7 +292,7 @@ export const TasksTab = () => {
       setStatus(
         [
           `Task ${result.task.taskId ?? result.task.id}`,
-          result.task.sessionKey ? `session ${result.task.sessionKey}` : null,
+          result.task.sessionId ? `session ${result.task.sessionId}` : (result.task.sessionKey ? `session ${result.task.sessionKey}` : null),
           result.task.runId ? `run ${result.task.runId}` : null,
         ]
           .filter(Boolean)
@@ -693,7 +693,7 @@ export const TasksTab = () => {
                           <div className="mt-3 space-y-2">
                             <div className="grid gap-1 text-[10px] text-muted-foreground sm:grid-cols-2">
                               <span className="truncate">ID: {task.taskId || task.id}</span>
-                              <span className="truncate">Sessão: {task.sessionKey || "—"}</span>
+                              <span className="truncate">Sessão: {task.sessionId || task.sessionKey || "—"}</span>
                             </div>
 
                             <Select
@@ -818,7 +818,7 @@ export const TasksTab = () => {
                         Sessão actual
                       </label>
                       <div className="rounded-xl border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                        {detail.session?.sessionKey || detailTask.sessionKey || "Sem sessão activa"}
+                        {detail.session?.sessionId || detailTask.sessionId || detail.session?.sessionKey || detailTask.sessionKey || "Sem sessão activa"}
                       </div>
                     </div>
                   </div>

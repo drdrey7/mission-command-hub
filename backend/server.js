@@ -39,6 +39,7 @@ const TASKS_PATH = '/root/.openclaw/TASKS.md';
 const TASK_TASK_ID_COMMENT_RE = /<!--\s*mc-task-id:\s*([^>]+?)\s*-->/i;
 const TASK_AGENT_ID_COMMENT_RE = /<!--\s*mc-agent-id:\s*([^>]+?)\s*-->/i;
 const TASK_SESSION_KEY_COMMENT_RE = /<!--\s*mc-session-key:\s*([^>]+?)\s*-->/i;
+const TASK_SESSION_ID_COMMENT_RE = /<!--\s*mc-session-id:\s*([^>]+?)\s*-->/i;
 const TASK_RUN_ID_COMMENT_RE = /<!--\s*mc-run-id:\s*([^>]+?)\s*-->/i;
 const TASK_STATUS_COMMENT_RE = /<!--\s*mc-dispatch-status:\s*([^>]+?)\s*-->/i;
 const TASK_CONCLUSION_COMMENT_RE = /<!--\s*mc-conclusion:\s*([^>]+?)\s*-->/i;
@@ -115,6 +116,7 @@ function parseTaskComments(text) {
     taskId: null,
     agentId: null,
     sessionKey: null,
+    sessionId: null,
     runId: null,
     dispatchStatus: null,
     conclusion: null,
@@ -124,6 +126,7 @@ function parseTaskComments(text) {
   const taskId = raw.match(TASK_TASK_ID_COMMENT_RE)?.[1]?.trim();
   const agentId = raw.match(TASK_AGENT_ID_COMMENT_RE)?.[1]?.trim();
   const sessionKey = raw.match(TASK_SESSION_KEY_COMMENT_RE)?.[1]?.trim();
+  const sessionId = raw.match(TASK_SESSION_ID_COMMENT_RE)?.[1]?.trim();
   const runId = raw.match(TASK_RUN_ID_COMMENT_RE)?.[1]?.trim();
   const dispatchStatus = raw.match(TASK_STATUS_COMMENT_RE)?.[1]?.trim();
   const conclusion = raw.match(TASK_CONCLUSION_COMMENT_RE)?.[1]?.trim();
@@ -131,6 +134,7 @@ function parseTaskComments(text) {
   if (taskId) parsed.taskId = taskId;
   if (agentId) parsed.agentId = agentId;
   if (sessionKey) parsed.sessionKey = sessionKey;
+  if (sessionId) parsed.sessionId = sessionId;
   if (runId) parsed.runId = runId;
   if (dispatchStatus) parsed.dispatchStatus = dispatchStatus;
   if (conclusion) parsed.conclusion = conclusion;
@@ -142,6 +146,7 @@ function buildTaskComments(task) {
   if (task.taskId) comments.push(`<!-- mc-task-id: ${task.taskId} -->`);
   if (task.agentId) comments.push(`<!-- mc-agent-id: ${task.agentId} -->`);
   if (task.sessionKey) comments.push(`<!-- mc-session-key: ${task.sessionKey} -->`);
+  if (task.sessionId) comments.push(`<!-- mc-session-id: ${task.sessionId} -->`);
   if (task.runId) comments.push(`<!-- mc-run-id: ${task.runId} -->`);
   if (task.dispatchStatus) comments.push(`<!-- mc-dispatch-status: ${task.dispatchStatus} -->`);
   if (task.conclusion) {
@@ -155,8 +160,12 @@ function generateTaskId() {
   return `mc-${randomUUID()}`;
 }
 
-function toTaskSessionKey(agentId, taskId, runId = null) {
-  return runId ? `agent:${agentId}:mc-task:${taskId}:${runId}` : `agent:${agentId}:mc-task:${taskId}`;
+function toAgentSessionKey(agentId) {
+  return `agent:${agentId}:main`;
+}
+
+function toTaskSessionId(agentId, taskId) {
+  return `agent:${agentId}:mc-task:${taskId}`;
 }
 
 function normalizeTaskDisplayText(text) {
@@ -178,6 +187,7 @@ function parseTaskLine(line, sectionKey, index) {
     taskId: meta.taskId,
     agentId: meta.agentId,
     sessionKey: meta.sessionKey,
+    sessionId: meta.sessionId,
     runId: meta.runId,
     dispatchStatus: meta.dispatchStatus,
     conclusion: meta.conclusion,
@@ -432,6 +442,7 @@ function updateTaskEntryMetadata(task, patch = {}) {
   if (patch.taskId !== undefined) task.taskId = patch.taskId;
   if (patch.agentId !== undefined) task.agentId = patch.agentId;
   if (patch.sessionKey !== undefined) task.sessionKey = patch.sessionKey;
+  if (patch.sessionId !== undefined) task.sessionId = patch.sessionId;
   if (patch.runId !== undefined) task.runId = patch.runId;
   if (patch.dispatchStatus !== undefined) task.dispatchStatus = patch.dispatchStatus;
   if (patch.conclusion !== undefined) task.conclusion = patch.conclusion;
@@ -470,6 +481,36 @@ function findSessionRecordByKey(sessionKey) {
   return null;
 }
 
+function findSessionRecordById(sessionId) {
+  if (!sessionId) return null;
+  const agentsRoot = '/root/.openclaw/agents';
+  if (!fs.existsSync(agentsRoot)) return null;
+
+  for (const agentId of fs.readdirSync(agentsRoot)) {
+    const storePath = path.join(agentsRoot, agentId, 'sessions', 'sessions.json');
+    const store = readJsonFileSafe(storePath);
+    if (!store || typeof store !== 'object') continue;
+
+    for (const [sessionKey, record] of Object.entries(store)) {
+      if (!record || typeof record !== 'object') continue;
+      if (String(record.sessionId || '').trim() !== String(sessionId).trim()) continue;
+
+      return {
+        agentId,
+        storePath,
+        sessionKey,
+        ...record,
+      };
+    }
+  }
+
+  return null;
+}
+
+function findSessionRecord(sessionKey, sessionId = null) {
+  return findSessionRecordByKey(sessionKey) || findSessionRecordById(sessionId);
+}
+
 function extractFinalAssistantText(sessionFilePath) {
   if (!sessionFilePath || !fs.existsSync(sessionFilePath)) return null;
 
@@ -499,8 +540,8 @@ function extractFinalAssistantText(sessionFilePath) {
 }
 
 function resolveTaskConclusion(task) {
-  if (!task?.sessionKey) return null;
-  const sessionRecord = findSessionRecordByKey(task.sessionKey);
+  if (!task?.sessionKey && !task?.sessionId) return null;
+  const sessionRecord = findSessionRecord(task.sessionKey, task.sessionId);
   if (!sessionRecord) return null;
 
   const sessionStatus = String(sessionRecord.status || '').trim().toLowerCase();
@@ -591,7 +632,7 @@ function buildTaskRunFromBoard(task, sessionRecord = null) {
   return {
     runId: task.runId || sessionRecord?.sessionId || null,
     sessionKey: task.sessionKey || null,
-    sessionId: sessionRecord?.sessionId || null,
+    sessionId: task.sessionId || sessionRecord?.sessionId || null,
     agentId: task.agentId || sessionRecord?.agentId || null,
     status: normalizeDispatchStatus(task.dispatchStatus) || (task.section === 'completed' ? 'completed' : 'dispatched'),
     section: task.section || null,
@@ -638,6 +679,7 @@ function syncTaskExecutionStoreFromDocument(document) {
         currentStatus: task.section || block.canonicalSection,
         currentAgentId: task.agentId || null,
         currentSessionKey: task.sessionKey || null,
+        currentSessionId: task.sessionId || null,
         currentRunId: task.runId || null,
         currentConclusion: task.conclusion || null,
       });
@@ -669,6 +711,10 @@ function syncTaskExecutionStoreFromDocument(document) {
         record.currentSessionKey = task.sessionKey || null;
         changed = true;
       }
+      if (record.currentSessionId !== (task.sessionId || null)) {
+        record.currentSessionId = task.sessionId || null;
+        changed = true;
+      }
       if (record.currentRunId !== (task.runId || null)) {
         record.currentRunId = task.runId || null;
         changed = true;
@@ -678,13 +724,14 @@ function syncTaskExecutionStoreFromDocument(document) {
         changed = true;
       }
 
-      const sessionRecord = task.sessionKey ? findSessionRecordByKey(task.sessionKey) : null;
+      const sessionRecord = findSessionRecord(task.sessionKey, task.sessionId);
       const sessionKey = task.sessionKey || null;
+      const sessionId = task.sessionId || null;
       const existingRunIndex = sessionKey
         ? record.history.findIndex((run) => run.sessionKey === sessionKey || (task.runId && run.runId === task.runId))
         : -1;
       const shouldSyncRun = Boolean(sessionKey) || task.section === 'completed' || Boolean(task.dispatchStatus);
-      const hasExecutionFingerprint = Boolean(sessionKey || task.runId);
+      const hasExecutionFingerprint = Boolean(sessionKey || sessionId || task.runId);
 
       if (shouldSyncRun && existingRunIndex === -1 && (hasExecutionFingerprint || record.history.length === 0)) {
         appendTaskRun(store, taskId, buildTaskRunFromBoard(task, sessionRecord));
@@ -697,6 +744,8 @@ function syncTaskExecutionStoreFromDocument(document) {
         const nextRunPatch = {
           status: normalizeDispatchStatus(task.dispatchStatus) || existingRun.status,
           section: task.section || existingRun.section || null,
+          currentSection: task.section || existingRun.currentSection || null,
+          currentStatus: normalizeDispatchStatus(task.dispatchStatus) || task.section || existingRun.currentStatus || null,
           instruction: task.text || existingRun.instruction || null,
           conclusion: finalText || task.conclusion || existingRun.conclusion || null,
           sessionId: sessionRecord?.sessionId || existingRun.sessionId || null,
@@ -726,8 +775,9 @@ function buildTaskDetailPayload(task, record, boardDocument) {
   const history = Array.isArray(record?.history) ? [...record.history] : [];
   const events = Array.isArray(record?.events) ? [...record.events] : [];
   const currentRun = history.length ? history[history.length - 1] : null;
-  const taskBoardSessionRecord = task?.sessionKey ? findSessionRecordByKey(task.sessionKey) : null;
-  const currentSessionRecord = taskBoardSessionRecord || (currentRun?.sessionKey ? findSessionRecordByKey(currentRun.sessionKey) : null);
+  const taskBoardSessionRecord = findSessionRecord(task?.sessionKey, task?.sessionId);
+  const currentSessionRecord = taskBoardSessionRecord
+    || (currentRun?.sessionKey ? findSessionRecord(currentRun.sessionKey, currentRun.sessionId) : null);
 
   return {
     task: {
@@ -737,6 +787,7 @@ function buildTaskDetailPayload(task, record, boardDocument) {
       currentStatus: record?.currentStatus || task.section || null,
       currentText: record?.currentText || task.text || null,
       taskId: task.taskId || task.id,
+      sessionId: record?.currentSessionId || task.sessionId || null,
     },
     record: record || null,
     history,
@@ -812,6 +863,20 @@ function buildOpenClawEnv() {
     env.OPENCLAW_GATEWAY_TOKEN = token;
   }
   return env;
+}
+
+function extractDispatchReplyText(parsed) {
+  const payloads = Array.isArray(parsed?.payloads) ? parsed.payloads : [];
+  const text = payloads
+    .map((payload) => String(payload?.text || '').trim())
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
+
+  if (!text) return '';
+  if (/^⚠️\s*Agent couldn't generate a response/i.test(text)) return '';
+  if (/^Agent couldn't generate a response/i.test(text)) return '';
+  return text;
 }
 
 function resolveOpenRouterApiKey() {
@@ -984,25 +1049,54 @@ async function runPromptGeneration(idea, context = {}) {
 async function runAgentDispatch(params) {
   const cli = resolveOpenClawCli();
   const args = [
-    'gateway',
-    'call',
     'agent',
+    '--agent',
+    params.agentId,
+    '--session-id',
+    params.sessionId,
+    '--message',
+    params.message,
     '--json',
-    '--params',
-    JSON.stringify({
-      message: params.message,
-      sessionKey: params.sessionKey,
-      idempotencyKey: params.idempotencyKey,
-      agentId: params.agentId,
-      deliver: false,
-    }),
   ];
-  const { stdout } = await execFileAsync(cli, args, {
+  if (params.thinking) {
+    args.push('--thinking', params.thinking);
+  }
+
+  console.info('[tasks][dispatch] sending', JSON.stringify({
+    agentId: params.agentId,
+    taskId: params.taskId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    idempotencyKey: params.idempotencyKey,
+  }));
+
+  const { stdout, stderr } = await execFileAsync(cli, args, {
     env: buildOpenClawEnv(),
-    timeout: 20000,
+    timeout: 120000,
   });
-  const parsed = JSON.parse(stdout || '{}');
-  return parsed;
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout || '{}');
+  } catch (error) {
+    throw new Error(`OpenClaw dispatch returned invalid JSON: ${String(error?.message || error)}`);
+  }
+
+  const replyText = extractDispatchReplyText(parsed);
+  const sessionMeta = parsed?.meta?.agentMeta || {};
+  const sessionKey = String(sessionMeta.sessionKey || params.sessionKey || '').trim() || null;
+  const sessionId = String(sessionMeta.sessionId || params.sessionId || '').trim() || null;
+
+  if (!replyText) {
+    const errorText = String(stderr || parsed?.error || parsed?.message || 'OpenClaw dispatch produced no reply');
+    throw new Error(errorText);
+  }
+
+  return {
+    ...parsed,
+    replyText,
+    sessionKey,
+    sessionId,
+  };
 }
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
@@ -1148,7 +1242,8 @@ app.post('/api/tasks/dispatch', async (req, res) => {
     const document = loadTasksDocument();
     const taskId = providedTaskId || generateTaskId();
     const runId = `task:${taskId}:run:${randomUUID()}`;
-    const sessionKey = toTaskSessionKey(agentId, taskId, runId);
+    const sessionKey = toAgentSessionKey(agentId);
+    const sessionId = toTaskSessionId(agentId, taskId);
     const taskText = idea;
     const sectionBlock = findOrCreateSectionBlock(document, section);
     const existingTaskRef = findTaskEntryById(document, taskId);
@@ -1168,6 +1263,7 @@ app.post('/api/tasks/dispatch', async (req, res) => {
         owner: inferTaskOwner(taskText),
         agentId,
         sessionKey,
+        sessionId,
         runId,
         dispatchStatus: 'queued',
         conclusion: null,
@@ -1189,6 +1285,7 @@ app.post('/api/tasks/dispatch', async (req, res) => {
       taskRecord.owner = inferTaskOwner(taskRecord.text);
       taskRecord.agentId = agentId;
       taskRecord.sessionKey = sessionKey;
+      taskRecord.sessionId = sessionId;
       taskRecord.runId = runId;
       taskRecord.dispatchStatus = 'queued';
       taskRecord.conclusion = null;
@@ -1202,6 +1299,7 @@ app.post('/api/tasks/dispatch', async (req, res) => {
       currentStatus: section,
       currentAgentId: agentId,
       currentSessionKey: sessionKey,
+      currentSessionId: sessionId,
       currentRunId: runId,
       currentConclusion: null,
     });
@@ -1209,6 +1307,7 @@ app.post('/api/tasks/dispatch', async (req, res) => {
       type: hadTaskBefore ? (previousSection === 'completed' ? 'reopened' : 'dispatch_requested') : 'created',
       agentId,
       sessionKey,
+      sessionId,
       runId,
       section,
       text: taskRecord.text,
@@ -1220,6 +1319,7 @@ app.post('/api/tasks/dispatch', async (req, res) => {
       taskStoreRecord.currentStatus = section;
       taskStoreRecord.currentAgentId = agentId;
       taskStoreRecord.currentSessionKey = sessionKey;
+      taskStoreRecord.currentSessionId = sessionId;
       taskStoreRecord.currentRunId = runId;
       taskStoreRecord.currentConclusion = null;
     }
@@ -1230,46 +1330,74 @@ app.post('/api/tasks/dispatch', async (req, res) => {
       const dispatchResult = await runAgentDispatch({
         message: prompt,
         sessionKey,
+        sessionId,
         idempotencyKey: runId,
         agentId,
+        taskId,
       });
+
+      const replyText = dispatchResult.replyText;
+      const completedSection = findOrCreateSectionBlock(document, 'completed');
+      if (taskRecord.section !== 'completed') {
+        const currentTaskRef = findTaskEntryById(document, taskId);
+        if (currentTaskRef && currentTaskRef.block !== completedSection) {
+          currentTaskRef.block.entries.splice(currentTaskRef.index, 1);
+          completedSection.entries.push({
+            kind: 'task',
+            task: taskRecord,
+          });
+        }
+      }
+
+      taskRecord.section = 'completed';
+      taskRecord.checked = true;
+      taskRecord.sessionKey = dispatchResult.sessionKey || sessionKey;
+      taskRecord.sessionId = dispatchResult.sessionId || sessionId;
+      taskRecord.runId = dispatchResult?.runId ? String(dispatchResult.runId) : runId;
+      taskRecord.dispatchStatus = 'completed';
+      taskRecord.conclusion = replyText;
 
       updateTaskEntryMetadata(taskRecord, {
         taskId,
         agentId,
-        sessionKey,
+        sessionKey: dispatchResult.sessionKey || sessionKey,
+        sessionId: dispatchResult.sessionId || sessionId,
         runId: dispatchResult?.runId ? String(dispatchResult.runId) : runId,
-        dispatchStatus: normalizeDispatchStatus(dispatchResult?.status || 'accepted'),
-        conclusion: null,
+        dispatchStatus: 'completed',
+        conclusion: replyText,
       });
       appendTaskEvent(executionStore, taskId, {
-        type: 'dispatched',
+        type: 'completed',
         agentId,
-        sessionKey,
+        sessionKey: dispatchResult.sessionKey || sessionKey,
+        sessionId: dispatchResult.sessionId || sessionId,
         runId: dispatchResult?.runId ? String(dispatchResult.runId) : runId,
-        section,
-        status: normalizeDispatchStatus(dispatchResult?.status || 'accepted'),
+        section: 'completed',
+        status: 'completed',
+        text: taskRecord.text,
+        prompt,
+        note: 'Agent reply captured and task completed',
       });
       appendTaskRun(executionStore, taskId, {
         runId: dispatchResult?.runId ? String(dispatchResult.runId) : runId,
-        sessionKey,
-        sessionId: dispatchResult?.sessionId || null,
+        sessionKey: dispatchResult.sessionKey || sessionKey,
+        sessionId: dispatchResult.sessionId || sessionId,
         agentId,
-        status: normalizeDispatchStatus(dispatchResult?.status || 'accepted'),
-        section,
+        status: 'completed',
+        section: 'completed',
         instruction: taskRecord.text,
         prompt,
-        conclusion: null,
+        conclusion: replyText,
         currentText: taskRecord.text,
-        currentSection: section,
-        currentStatus: normalizeDispatchStatus(dispatchResult?.status || 'accepted'),
+        currentSection: 'completed',
+        currentStatus: 'completed',
         startedAt: null,
         endedAt: null,
         updatedAt: null,
         runtimeMs: null,
         tokens: null,
-        provider: dispatchResult?.provider || null,
-        model: dispatchResult?.model || null,
+        provider: dispatchResult?.meta?.agentMeta?.provider || dispatchResult?.provider || null,
+        model: dispatchResult?.meta?.agentMeta?.model || dispatchResult?.model || null,
         source: 'dispatch',
       });
       saveTaskExecutionStore(executionStore);
@@ -1285,6 +1413,7 @@ app.post('/api/tasks/dispatch', async (req, res) => {
         taskId,
         agentId,
         sessionKey,
+        sessionId,
         dispatchStatus: 'failed',
         conclusion: null,
       });
@@ -1292,6 +1421,7 @@ app.post('/api/tasks/dispatch', async (req, res) => {
         type: 'dispatch_failed',
         agentId,
         sessionKey,
+        sessionId,
         runId,
         section,
         error: String(dispatchError?.message || dispatchError),
@@ -1299,7 +1429,7 @@ app.post('/api/tasks/dispatch', async (req, res) => {
       appendTaskRun(executionStore, taskId, {
         runId,
         sessionKey,
-        sessionId: null,
+        sessionId,
         agentId,
         status: 'failed',
         section,
@@ -1698,16 +1828,18 @@ app.post('/api/tasks/:taskId/follow-up', async (req, res) => {
     }
 
     const runId = `task:${taskId}:run:${randomUUID()}`;
-    const sessionKey = toTaskSessionKey(agentId, taskId, runId);
+    const sessionKey = toAgentSessionKey(agentId);
+    const sessionId = toTaskSessionId(agentId, taskId);
 
     task.text = instruction;
     task.owner = inferTaskOwner(instruction);
     task.agentId = agentId;
     task.checked = false;
     task.section = section;
-    task.sessionKey = null;
+    task.sessionKey = sessionKey;
+    task.sessionId = sessionId;
     task.runId = null;
-    task.dispatchStatus = null;
+    task.dispatchStatus = 'queued';
     task.conclusion = null;
     if (taskRef.block !== findOrCreateSectionBlock(document, section)) {
       taskRef.block.entries.splice(taskRef.index, 1);
@@ -1724,6 +1856,7 @@ app.post('/api/tasks/:taskId/follow-up', async (req, res) => {
       currentStatus: section,
       currentAgentId: agentId,
       currentSessionKey: sessionKey,
+      currentSessionId: sessionId,
       currentRunId: runId,
       currentConclusion: null,
     });
@@ -1733,6 +1866,7 @@ app.post('/api/tasks/:taskId/follow-up', async (req, res) => {
       toSection: section,
       agentId,
       sessionKey,
+      sessionId,
       runId,
       text: instruction,
       prompt,
@@ -1744,48 +1878,76 @@ app.post('/api/tasks/:taskId/follow-up', async (req, res) => {
       const dispatchResult = await runAgentDispatch({
         message: prompt,
         sessionKey,
+        sessionId,
         idempotencyKey: runId,
         agentId,
+        taskId,
       });
+
+      const replyText = dispatchResult.replyText;
+      const completedSection = findOrCreateSectionBlock(document, 'completed');
+      if (task.section !== 'completed') {
+        const currentTaskRef = findTaskEntryById(document, taskId);
+        if (currentTaskRef && currentTaskRef.block !== completedSection) {
+          currentTaskRef.block.entries.splice(currentTaskRef.index, 1);
+          completedSection.entries.push({
+            kind: 'task',
+            task,
+          });
+        }
+      }
+
+      task.section = 'completed';
+      task.checked = true;
+      task.sessionKey = dispatchResult.sessionKey || sessionKey;
+      task.sessionId = dispatchResult.sessionId || sessionId;
+      task.runId = dispatchResult?.runId ? String(dispatchResult.runId) : runId;
+      task.dispatchStatus = 'completed';
+      task.conclusion = replyText;
 
       updateTaskEntryMetadata(task, {
         taskId,
         agentId,
-        sessionKey,
+        sessionKey: dispatchResult.sessionKey || sessionKey,
+        sessionId: dispatchResult.sessionId || sessionId,
         runId: dispatchResult?.runId ? String(dispatchResult.runId) : runId,
-        dispatchStatus: normalizeDispatchStatus(dispatchResult?.status || 'accepted'),
-        conclusion: null,
+        dispatchStatus: 'completed',
+        conclusion: replyText,
       });
 
       appendTaskEvent(store, taskId, {
-        type: 'dispatched',
+        type: 'completed',
         fromSection: previousSection,
-        toSection: section,
+        toSection: 'completed',
         agentId,
-        sessionKey,
+        sessionKey: dispatchResult.sessionKey || sessionKey,
+        sessionId: dispatchResult.sessionId || sessionId,
         runId: dispatchResult?.runId ? String(dispatchResult.runId) : runId,
-        status: normalizeDispatchStatus(dispatchResult?.status || 'accepted'),
+        status: 'completed',
+        text: task.text,
+        prompt,
+        note: 'Agent reply captured and task completed',
       });
       appendTaskRun(store, taskId, {
         runId: dispatchResult?.runId ? String(dispatchResult.runId) : runId,
-        sessionKey,
-        sessionId: dispatchResult?.sessionId || null,
+        sessionKey: dispatchResult.sessionKey || sessionKey,
+        sessionId: dispatchResult.sessionId || sessionId,
         agentId,
-        status: normalizeDispatchStatus(dispatchResult?.status || 'accepted'),
-        section,
+        status: 'completed',
+        section: 'completed',
         instruction,
         prompt,
-        conclusion: null,
+        conclusion: replyText,
         currentText: instruction,
-        currentSection: section,
-        currentStatus: normalizeDispatchStatus(dispatchResult?.status || 'accepted'),
+        currentSection: 'completed',
+        currentStatus: 'completed',
         startedAt: null,
         endedAt: null,
         updatedAt: null,
         runtimeMs: null,
         tokens: null,
-        provider: dispatchResult?.provider || null,
-        model: dispatchResult?.model || null,
+        provider: dispatchResult?.meta?.agentMeta?.provider || dispatchResult?.provider || null,
+        model: dispatchResult?.meta?.agentMeta?.model || dispatchResult?.model || null,
         source: 'follow-up',
       });
       saveTaskExecutionStore(store);
@@ -1802,6 +1964,7 @@ app.post('/api/tasks/:taskId/follow-up', async (req, res) => {
         taskId,
         agentId,
         sessionKey,
+        sessionId,
         dispatchStatus: 'failed',
         conclusion: null,
       });
@@ -1811,13 +1974,14 @@ app.post('/api/tasks/:taskId/follow-up', async (req, res) => {
         toSection: section,
         agentId,
         sessionKey,
+        sessionId,
         runId,
         error: String(dispatchError?.message || dispatchError),
       });
       appendTaskRun(store, taskId, {
         runId,
         sessionKey,
-        sessionId: null,
+        sessionId,
         agentId,
         status: 'failed',
         section,

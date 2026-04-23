@@ -48,6 +48,7 @@ export interface TaskItem {
   taskId?: string | null;
   agentId?: string | null;
   sessionKey?: string | null;
+  sessionId?: string | null;
   runId?: string | null;
   dispatchStatus?: string | null;
   conclusion?: string | null;
