@@ -708,6 +708,55 @@ export const sendChat = async (agent: AgentKey, message: string) =>
     body: JSON.stringify({ message }),
   });
 
+export interface ChatTranscriptionResponse {
+  ok: boolean;
+  collectedAt: string;
+  source: string;
+  warnings: string[];
+  errors: string[];
+  agentId: string | null;
+  agentName?: string | null;
+  model: string;
+  transcript: string;
+  filename: string;
+  mimeType: string;
+  bytes: number;
+}
+
+export const transcribeChatAudio = async (
+  agent: AgentKey,
+  audio: Blob,
+  options?: { filename?: string; mimeType?: string },
+): Promise<ChatTranscriptionResponse> => {
+  const token = TOKEN || localStorage.getItem("openclaw_token") || "";
+  const url = `${API_URL}/api/chat/${agent}/transcribe`;
+  const mimeType = options?.mimeType || audio.type || "application/octet-stream";
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      "Content-Type": mimeType,
+      ...(options?.filename ? { "X-Filename": options.filename } : {}),
+    },
+    body: audio,
+  });
+
+  const raw = await res.text();
+  let data: Record<string, unknown> = {};
+  try {
+    data = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+  } catch {
+    data = raw ? { error: raw } : {};
+  }
+
+  if (!res.ok) {
+    const message = String((data.error as string | undefined) || (Array.isArray(data.errors) ? data.errors[0] : undefined) || `API ${res.status}`);
+    throw new Error(message);
+  }
+
+  return data as ChatTranscriptionResponse;
+};
+
 /* ----------------- Fail2ban ----------------- */
 export interface Fail2banJail {
   name: string;

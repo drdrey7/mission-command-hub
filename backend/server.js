@@ -45,6 +45,9 @@ const {
   getFail2banHistory,
   toLegacyVpsPayload,
 } = require('./system-snapshot');
+const {
+  transcribeAudioBuffer,
+} = require('./audio-transcription');
 
 const app = express();
 app.use(cors());
@@ -2515,6 +2518,54 @@ app.post('/api/chat/:agent', async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+app.post('/api/chat/:agent/transcribe', express.raw({
+  type: ['audio/*', 'application/octet-stream', 'application/x-mpegURL', 'application/vnd.apple.mpegurl'],
+  limit: '25mb',
+}), async (req, res) => {
+  try {
+    const agentId = normalizeChatAgentId(req.params.agent);
+    if (!agentId) {
+      return res.status(400).json({ error: 'Agent is required' });
+    }
+
+    const state = await buildOpenClawState({ fetchImpl: fetch, token: getToken(), activityLimit: 20, sessionLimit: 20 });
+    const agent = findOpenClawAgentById(state, agentId);
+    if (!agent) {
+      return res.status(404).json({ error: `Unknown agent: ${agentId}` });
+    }
+
+    const body = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!body || body.length === 0) {
+      return res.status(400).json({ error: 'Audio payload is required' });
+    }
+
+    const mimeType = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].trim() || 'application/octet-stream';
+    const filename = String(req.headers['x-filename'] || `recording-${Date.now()}`).trim();
+    const transcript = await transcribeAudioBuffer({
+      fetchImpl: globalThis.fetch || fetch,
+      buffer: body,
+      mimeType,
+      filename,
+      agentId,
+    });
+
+    res.json({
+      ok: true,
+      ...transcript,
+      agentName: agent.name || agentId,
+    });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      collectedAt: new Date().toISOString(),
+      source: 'groq',
+      warnings: [],
+      errors: [String(e?.message || e)],
+      transcript: '',
+    });
   }
 });
 
