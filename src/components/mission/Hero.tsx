@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Plane } from "lucide-react";
-import { getAgents, getTasks, getAuditTrail, getFail2banStats } from "@/services/api";
+import { getOpenClawState, getTasks, getAuditTrail, getFail2banStats } from "@/services/api";
 import { cn } from "@/lib/utils";
 
 interface Kpi {
@@ -22,14 +22,14 @@ export const Hero = () => {
     let cancelled = false;
     const load = async () => {
       try {
-        const [agents, tasks, activity, fail2ban] = await Promise.all([
-          getAgents(),
+        const [state, tasks, activity, fail2ban] = await Promise.all([
+          getOpenClawState(),
           getTasks(),
           getAuditTrail(500),
           getFail2banStats(),
         ]);
         if (cancelled) return;
-        const active = agents.filter((a) => a.status === "em_voo" || a.status === "taxiing").length;
+        const active = state.workingAgentCount ?? state.activeAgentCount ?? 0;
         const banned = fail2ban.currentBannedCount ?? fail2ban.bannedCount ?? fail2ban.totalBanned;
         setKpis([
           { label: "Agentes ativos", value: String(active).padStart(2, "0") },

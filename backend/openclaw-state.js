@@ -88,12 +88,18 @@ function taskState(value) {
 }
 
 function displayAgentStatus(executionState, hasLiveSession, hasRecentActivity, hasErrors) {
-  if (hasErrors && !hasLiveSession && !hasRecentActivity) return 'on_ground';
+  if (hasErrors) return 'on_ground';
   if (hasLiveSession && executionState === 'in_progress') return 'em_voo';
   if (hasLiveSession && executionState === 'queued') return 'taxiing';
-  if (hasRecentActivity && executionState === 'in_progress') return 'taxiing';
-  if (executionState === 'error') return 'on_ground';
+  if (hasRecentActivity) return 'taxiing';
   return 'hangar';
+}
+
+function inferAgentState({ hasLiveSession, hasRecentActivity, hasErrors, executionState }) {
+  if (hasErrors) return 'error';
+  if (hasLiveSession || executionState === 'in_progress') return 'active';
+  if (hasRecentActivity) return 'waiting';
+  return 'idle';
 }
 
 function loadOpenClawConfig() {
@@ -471,6 +477,8 @@ function buildAgentState({ configAgents, gatewaySessions, localSessions, taskRec
     const hasRecentActivity = Boolean(lastActivityAt && now - lastActivityAt < 1000 * 60 * 60);
     const hasLiveSession = Boolean(liveSession);
     const hasErrors = executionState === 'error';
+    const agentState = inferAgentState({ hasLiveSession, hasRecentActivity, hasErrors, executionState });
+    const online = agentState === 'active' || agentState === 'waiting';
     const displayStatus = displayAgentStatus(executionState, hasLiveSession, hasRecentActivity, hasErrors);
     const visibleTask = executionState === 'in_progress' ? currentTask : null;
 
@@ -480,6 +488,8 @@ function buildAgentState({ configAgents, gatewaySessions, localSessions, taskRec
       name: agent.identity?.name || agent.name || agentId,
       role: agent.identity?.theme || 'Agente',
       status: displayStatus,
+      agentState,
+      online,
       executionStatus: executionState,
       sessions: sessions.length,
       sessionCount: sessions.length,
@@ -669,6 +679,12 @@ async function buildOpenClawState({ fetchImpl, token, activityLimit = 100, sessi
     localSessions,
     taskRecords,
   });
+  const configuredAgents = agents.length;
+  const onlineAgents = agents.filter((agent) => agent.online).length;
+  const workingAgents = agents.filter((agent) => agent.agentState === 'active').length;
+  const waitingAgents = agents.filter((agent) => agent.agentState === 'waiting').length;
+  const idleAgents = agents.filter((agent) => agent.agentState === 'idle').length;
+  const errorAgents = agents.filter((agent) => agent.agentState === 'error').length;
 
   const { entries: baseActivity, activityLogPath } = loadActivityLog();
   const activity = buildActivityFeed({
@@ -694,8 +710,17 @@ async function buildOpenClawState({ fetchImpl, token, activityLimit = 100, sessi
     sessions: combinedSessions,
     activity,
     activityCount: activity.length,
-    agentCount: agents.length,
-    activeAgentCount: agents.filter((agent) => agent.executionStatus === 'in_progress').length,
+    agentCount: configuredAgents,
+    configuredAgents,
+    configuredAgentCount: configuredAgents,
+    onlineAgents,
+    onlineAgentCount: onlineAgents,
+    workingAgents,
+    workingAgentCount: workingAgents,
+    activeAgentCount: workingAgents,
+    waitingAgents,
+    idleAgents,
+    errorAgents,
     gatewaySessionCount: gatewaySessions.length,
     localSessionCount: localSessions.size,
     taskCount: Object.keys(taskRecords || {}).length,

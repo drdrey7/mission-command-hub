@@ -204,6 +204,8 @@ export interface OpenClawStateAgent {
   name: string;
   role?: string | null;
   status: string;
+  agentState?: "active" | "waiting" | "idle" | "error";
+  online?: boolean;
   executionStatus?: string | null;
   sessions?: number;
   sessionCount?: number;
@@ -235,6 +237,16 @@ export interface OpenClawState {
   agents: OpenClawStateAgent[];
   sessions: Array<Record<string, unknown>>;
   activity: OpenClawStateActivity[];
+  configuredAgents?: number;
+  configuredAgentCount?: number;
+  onlineAgents?: number;
+  onlineAgentCount?: number;
+  workingAgents?: number;
+  workingAgentCount?: number;
+  activeAgentCount?: number;
+  waitingAgents?: number;
+  idleAgents?: number;
+  errorAgents?: number;
   errors?: string[];
   warnings?: string[];
   sources?: Record<string, unknown>;
@@ -353,6 +365,13 @@ export const getAgents = async (): Promise<Agent[]> => {
     flightStartedAt: undefined,
     currentTask: a.currentTask ?? undefined,
   }));
+};
+
+export const getOpenClawState = async (): Promise<OpenClawState> => {
+  if (USE_MOCK) {
+    return http<OpenClawState>("/api/state");
+  }
+  return http<OpenClawState>("/api/state");
 };
 
 /* Tasks */
