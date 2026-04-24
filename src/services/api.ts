@@ -8,27 +8,24 @@
  *   GET    /missions
  *   POST   /missions
  *   POST   /missions/:id/abort
- *   GET    /vps/nodes
- *   POST   /vps/nodes/:id/action          { action }
+ *   GET    /vps/snapshot
  *   GET    /audit?limit=50
  *   GET    /notifications
  *   POST   /chat/:agent                   { messages }
- *   GET    /fail2ban/jails                                          → Jail[]
- *   GET    /fail2ban/banned                                         → BannedIp[]
- *   POST   /fail2ban/unban                { ip, jail }              → { ok }
+ *   GET    /vps/snapshot                                            → VpsSnapshotResponse
  *   GET    /fail2ban/stats                                          → Fail2banStats
+ *   GET    /fail2ban/jails                                          → Fail2banJailsResponse
+ *   GET    /fail2ban/banned                                         → Fail2banBannedResponse
  */
 
 import {
   agents as mockAgents,
   tasks as mockTasks,
   missions as mockMissions,
-  vpsNodes as mockNodes,
   recentActivity as mockActivity,
   Agent,
   Task,
   Mission,
-  VpsNode,
   ActivityEvent,
   AgentKey,
 } from "@/data/mockData";
@@ -473,23 +470,61 @@ export const abortMission = (id: string) =>
   USE_MOCK ? delay({ ok: true }) : http(`/api/missions/${id}/abort`, { method: "POST" });
 
 /* VPS */
-export const getVpsNodes = (): Promise<VpsNode[]> => {
-  if (USE_MOCK) return delay(mockNodes);
-  return http<any>("/api/vps").then(data => {
-    console.log("[getVpsNodes] raw data:", data);
-    return [{
-      id: "vps-1",
-      name: "openclaw-vps",
-      region: "Hetzner · Helsinki",
-      cpu: typeof data.cpu === "number" ? data.cpu : parseFloat(data.cpu) || 0,
-      ram: typeof data.ram === "number" ? data.ram : (() => { const [u, t] = (data.ramRaw || "0/0").split("/").map((x: string) => parseFloat(x)); return Math.round((u / t) * 100); })(),
-      ramRaw: data.ramRaw || ((data.ram || "0/0").toString()),
-      disk: typeof data.disk === "number" ? data.disk : parseInt(data.disk) || 0,
-      status: data.ram !== "N/A" ? "online" as const : "offline" as const,
-      uptime: data.uptime ? data.uptime.replace("up ", "") : "N/A",
-      containers: Array.isArray(data.containers) ? data.containers : [],
-    }];
-  });
+export interface VpsContainerSnapshot {
+  name: string;
+  status: string;
+  healthy: boolean;
+}
+
+export interface VpsHostSnapshot {
+  hostname: string;
+  uptime: string | null;
+  cpuPercent: number | null;
+  ramUsed: string | null;
+  ramTotal: string | null;
+  ramPercent: number | null;
+  diskUsedPercent: number | null;
+}
+
+export interface VpsDockerSnapshot {
+  total: number | null;
+  healthy: number | null;
+  unhealthy: number | null;
+}
+
+export interface VpsSnapshotResponse {
+  ok: boolean;
+  collectedAt: string;
+  source: string;
+  warnings: string[];
+  errors: string[];
+  host: VpsHostSnapshot;
+  containers: VpsContainerSnapshot[];
+  docker: VpsDockerSnapshot;
+}
+
+export const getVpsSnapshot = (): Promise<VpsSnapshotResponse> => {
+  if (USE_MOCK) {
+    return delay({
+      ok: true,
+      collectedAt: new Date().toISOString(),
+      source: "system",
+      warnings: [],
+      errors: [],
+      host: {
+        hostname: "mock-host",
+        uptime: "0 minutes",
+        cpuPercent: 0,
+        ramUsed: "0Gi",
+        ramTotal: "0Gi",
+        ramPercent: 0,
+        diskUsedPercent: 0,
+      },
+      containers: [],
+      docker: { total: 0, healthy: 0, unhealthy: 0 },
+    });
+  }
+  return http<VpsSnapshotResponse>("/api/vps/snapshot");
 };
 export type VpsAction = "restart" | "snapshot" | "scale";
 export const vpsAction = (id: string, action: VpsAction) =>
@@ -549,81 +584,98 @@ export const sendChat = async (agent: AgentKey, messages: ChatMessage[]) => {
 
 /* ----------------- Fail2ban ----------------- */
 export interface Fail2banJail {
-  name: string;          // sshd, nginx-http-auth, recidive, ...
+  name: string;
   enabled: boolean;
-  filter: string;
-  findtime: number;      // seconds
-  bantime: number;       // seconds
-  maxretry: number;
-  currentlyBanned: number;
-  totalBanned: number;
-  failed: number;
+  currentlyFailed: number | null;
+  totalFailed: number | null;
+  currentlyBanned: number | null;
+  totalBanned: number | null;
+  bannedList: string[];
 }
 export interface BannedIp {
   ip: string;
   jail: string;
-  country?: string;
-  countryCode?: string;
-  attempts: number;
-  bannedAt: string;      // ISO
-  expiresAt?: string;    // ISO; omit for permanent
-  reason?: string;
 }
 export interface Fail2banStats {
-  totalBanned: number;
-  bannedLast24h: number;
-  failedLast24h: number;
-  jailsActive: number;
-  topCountries: { code: string; name: string; count: number }[];
-  attackTimeline: { hour: string; attempts: number; bans: number }[];   // last 24h
+  ok: boolean;
+  collectedAt: string;
+  source: string;
+  warnings: string[];
+  errors: string[];
+  totalBanned: number | null;
+  bannedCount: number | null;
+  jailsActive: number | null;
+}
+
+export interface Fail2banJailsResponse {
+  ok: boolean;
+  collectedAt: string;
+  source: string;
+  warnings: string[];
+  errors: string[];
+  jailsActive: number | null;
+  jails: Fail2banJail[];
+}
+
+export interface Fail2banBannedResponse {
+  ok: boolean;
+  collectedAt: string;
+  source: string;
+  warnings: string[];
+  errors: string[];
+  totalBanned: number | null;
+  bannedCount: number | null;
+  bannedList: BannedIp[];
 }
 
 const mockJails: Fail2banJail[] = [
-  { name: "sshd", enabled: true, filter: "sshd", findtime: 600, bantime: 3600, maxretry: 5, currentlyBanned: 12, totalBanned: 247, failed: 1342 },
-  { name: "nginx-http-auth", enabled: true, filter: "nginx-http-auth", findtime: 600, bantime: 7200, maxretry: 3, currentlyBanned: 4, totalBanned: 89, failed: 312 },
-  { name: "nginx-botsearch", enabled: true, filter: "nginx-botsearch", findtime: 600, bantime: 14400, maxretry: 2, currentlyBanned: 7, totalBanned: 156, failed: 487 },
-  { name: "recidive", enabled: true, filter: "recidive", findtime: 86400, bantime: 604800, maxretry: 5, currentlyBanned: 3, totalBanned: 31, failed: 31 },
-  { name: "postfix", enabled: false, filter: "postfix", findtime: 600, bantime: 3600, maxretry: 5, currentlyBanned: 0, totalBanned: 12, failed: 47 },
+  { name: "sshd", enabled: true, currentlyFailed: 0, totalFailed: 0, currentlyBanned: 0, totalBanned: 0, bannedList: [] },
 ];
 
-const now = Date.now();
 const mockBanned: BannedIp[] = [
-  { ip: "185.220.101.42", jail: "sshd", country: "Russia", countryCode: "RU", attempts: 27, bannedAt: new Date(now - 1000 * 60 * 4).toISOString(), expiresAt: new Date(now + 1000 * 60 * 56).toISOString(), reason: "5 falhas em 600s" },
-  { ip: "45.155.205.231", jail: "sshd", country: "Netherlands", countryCode: "NL", attempts: 14, bannedAt: new Date(now - 1000 * 60 * 12).toISOString(), expiresAt: new Date(now + 1000 * 60 * 48).toISOString(), reason: "5 falhas em 600s" },
-  { ip: "218.92.0.56", jail: "sshd", country: "China", countryCode: "CN", attempts: 89, bannedAt: new Date(now - 1000 * 60 * 22).toISOString(), expiresAt: new Date(now + 1000 * 60 * 38).toISOString(), reason: "brute-force persistente" },
-  { ip: "103.233.10.18", jail: "nginx-http-auth", country: "India", countryCode: "IN", attempts: 8, bannedAt: new Date(now - 1000 * 60 * 35).toISOString(), expiresAt: new Date(now + 1000 * 60 * 85).toISOString(), reason: "3 falhas em 600s" },
-  { ip: "62.210.85.143", jail: "nginx-botsearch", country: "France", countryCode: "FR", attempts: 12, bannedAt: new Date(now - 1000 * 60 * 48).toISOString(), expiresAt: new Date(now + 1000 * 60 * 192).toISOString(), reason: "scanner de exploits" },
-  { ip: "194.26.135.21", jail: "recidive", country: "Romania", countryCode: "RO", attempts: 156, bannedAt: new Date(now - 1000 * 60 * 60 * 2).toISOString(), expiresAt: new Date(now + 1000 * 60 * 60 * 166).toISOString(), reason: "reincidente · 7 dias" },
-  { ip: "92.118.39.74", jail: "sshd", country: "United States", countryCode: "US", attempts: 6, bannedAt: new Date(now - 1000 * 60 * 78).toISOString(), expiresAt: new Date(now + 1000 * 60 * (-18)).toISOString(), reason: "5 falhas em 600s" },
+  { ip: "185.220.101.42", jail: "sshd" },
 ];
 
 const mockStats: Fail2banStats = {
-  totalBanned: 26,
-  bannedLast24h: 47,
-  failedLast24h: 1893,
-  jailsActive: 4,
-  topCountries: [
-    { code: "CN", name: "China", count: 18 },
-    { code: "RU", name: "Russia", count: 11 },
-    { code: "US", name: "United States", count: 6 },
-    { code: "IN", name: "India", count: 5 },
-    { code: "BR", name: "Brazil", count: 4 },
-  ],
-  attackTimeline: Array.from({ length: 24 }, (_, i) => ({
-    hour: `${String(i).padStart(2, "0")}:00`,
-    attempts: Math.floor(40 + Math.random() * 120 + (i > 18 || i < 4 ? 80 : 0)),
-    bans: Math.floor(Math.random() * 5 + (i > 18 || i < 4 ? 3 : 0)),
-  })),
+  ok: true,
+  collectedAt: new Date().toISOString(),
+  source: "fail2ban",
+  warnings: [],
+  errors: [],
+  totalBanned: 0,
+  bannedCount: 0,
+  jailsActive: 0,
 };
 
-export const getFail2banJails = (): Promise<Fail2banJail[]> =>
-  USE_MOCK ? delay(mockJails) : http("/api/fail2ban/jails");
+export const getFail2banJails = (): Promise<Fail2banJailsResponse> =>
+  USE_MOCK
+    ? delay({
+        ok: true,
+        collectedAt: new Date().toISOString(),
+        source: "fail2ban",
+        warnings: [],
+        errors: [],
+        jailsActive: mockJails.length,
+        jails: mockJails,
+      })
+    : http<Fail2banJailsResponse>("/api/fail2ban/jails");
 
-export const getFail2banBanned = (): Promise<BannedIp[]> =>
-  USE_MOCK ? delay(mockBanned) : http("/api/fail2ban/banned");
+export const getFail2banBanned = (): Promise<Fail2banBannedResponse> =>
+  USE_MOCK
+    ? delay({
+        ok: true,
+        collectedAt: new Date().toISOString(),
+        source: "fail2ban",
+        warnings: [],
+        errors: [],
+        totalBanned: mockBanned.length,
+        bannedCount: mockBanned.length,
+        bannedList: mockBanned,
+      })
+    : http<Fail2banBannedResponse>("/api/fail2ban/banned");
 
 export const getFail2banStats = (): Promise<Fail2banStats> =>
-  USE_MOCK ? delay(mockStats) : http("/api/fail2ban/stats");
+  USE_MOCK ? delay(mockStats) : http<Fail2banStats>("/api/fail2ban/stats");
 
 export const unbanIp = (ip: string, jail: string) =>
   USE_MOCK ? delay({ ok: true, ip, jail }, 400)

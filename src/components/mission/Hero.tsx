@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Plane } from "lucide-react";
-import { getAgents, getTasks, getAuditTrail, getVpsNodes } from "@/services/api";
+import { getAgents, getTasks, getAuditTrail, getFail2banStats } from "@/services/api";
 import { cn } from "@/lib/utils";
 
 interface Kpi {
@@ -22,15 +22,20 @@ export const Hero = () => {
     let cancelled = false;
     const load = async () => {
       try {
-        const [agents, tasks, activity, vps] = await Promise.all([getAgents(), getTasks(), getAuditTrail(500), getVpsNodes()]);
+        const [agents, tasks, activity, fail2ban] = await Promise.all([
+          getAgents(),
+          getTasks(),
+          getAuditTrail(500),
+          getFail2banStats(),
+        ]);
         if (cancelled) return;
         const active = agents.filter((a) => a.status === "em_voo" || a.status === "taxiing").length;
-        const banned = vps[0]?.banned ?? 0;
+        const banned = fail2ban.bannedCount ?? fail2ban.totalBanned;
         setKpis([
           { label: "Agentes ativos", value: String(active).padStart(2, "0") },
           { label: "Tarefas", value: String(tasks.summary.total).padStart(2, "0") },
           { label: "Eventos 24h", value: String(activity.length), tone: activity.length > 100 ? "warning" : "default" },
-          { label: "IPs banidos", value: String(banned), tone: banned > 0 ? "danger" : "default" },
+          { label: "IPs banidos", value: banned === null ? "—" : String(banned), tone: (banned ?? 0) > 0 ? "danger" : "default" },
         ]);
         setError(null);
       } catch (err) {
