@@ -629,6 +629,47 @@ export const unbanIp = (ip: string, jail: string) =>
   USE_MOCK ? delay({ ok: true, ip, jail }, 400)
            : http("/api/fail2ban/unban", { method: "POST", body: JSON.stringify({ ip, jail }) });
 
-/* Memory - N/A, no real backend endpoint */
-export interface MemoryEntry { id: string; agent: string; content: string; timestamp: string; }
-export const getMemory = async (): Promise<MemoryEntry[]> => [];
+/* Memory */
+export interface MemoryIndexDay {
+  day: string;
+  agents: string[];
+  exists: boolean;
+}
+
+export interface MemoryIndexResponse {
+  ok: boolean;
+  latestDay: string | null;
+  source: string;
+  indexExists: boolean;
+  days: MemoryIndexDay[];
+  agents: string[];
+}
+
+export interface MemoryEntry {
+  day: string;
+  agent: string;
+  content: string;
+  exists: boolean;
+  mtime: string | null;
+}
+
+export interface MemoryDayResponse {
+  ok: boolean;
+  day: string | null;
+  agents: string[];
+  entries: MemoryEntry[];
+  exists: boolean;
+  mtime: string | null;
+}
+
+export const getMemoryIndex = (): Promise<MemoryIndexResponse> =>
+  http<MemoryIndexResponse>("/api/memory/index");
+
+export const getLatestMemory = (): Promise<MemoryDayResponse> =>
+  http<MemoryDayResponse>("/api/memory/latest");
+
+export const getMemoryDay = (day: string): Promise<MemoryDayResponse> =>
+  http<MemoryDayResponse>(`/api/memory/day/${encodeURIComponent(day)}`);
+
+export const getMemoryAgent = (day: string, agent: string): Promise<MemoryEntry> =>
+  http<MemoryEntry>(`/api/memory/day/${encodeURIComponent(day)}/${encodeURIComponent(agent)}`);

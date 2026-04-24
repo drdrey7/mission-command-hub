@@ -22,6 +22,12 @@ const {
   taskState: normalizeTaskState,
   resolveTranscriptPath,
 } = require('./openclaw-state');
+const {
+  getLatestMemory,
+  getMemoryDay,
+  getMemoryEntry,
+  getMemoryIndex,
+} = require('./memory-summaries');
 
 const app = express();
 app.use(cors());
@@ -2151,6 +2157,58 @@ app.get('/api/sessions', async (req, res) => {
       sources: state.sources,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/memory/index', (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      ...getMemoryIndex(),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/memory/latest', (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      ...getLatestMemory(),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/memory/day/:day', (req, res) => {
+  try {
+    const result = getMemoryDay(req.params.day);
+    if (result?.error) {
+      return res.status(result.status || 400).json({ error: result.error });
+    }
+    res.json({
+      ok: true,
+      ...result,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/memory/day/:day/:agent', (req, res) => {
+  try {
+    const result = getMemoryEntry(req.params.day, req.params.agent);
+    if (result?.error) {
+      return res.status(result.status || 400).json({ error: result.error });
+    }
+    res.json({
+      ok: true,
+      ...result,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // GET /api/diary?date=YYYY-MM-DD - Returns aggregated diary data for a given date
