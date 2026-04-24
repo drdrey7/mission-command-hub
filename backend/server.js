@@ -22,6 +22,20 @@ const {
   taskState: normalizeTaskState,
   resolveTranscriptPath,
 } = require('./openclaw-state');
+const {
+  getLatestMemory,
+  getMemoryDay,
+  getMemoryEntry,
+  getMemoryIndex,
+} = require('./memory-summaries');
+const {
+  getVpsSnapshot,
+  getFail2banStats,
+  getFail2banJails,
+  getFail2banBanned,
+  getFail2banHistory,
+  toLegacyVpsPayload,
+} = require('./system-snapshot');
 
 const app = express();
 app.use(cors());
@@ -1185,85 +1199,46 @@ app.get('/api/state', async (req, res) => {
   }
 });
 
+app.get('/api/vps/snapshot', async (req, res) => {
+  try {
+    const snapshot = await getVpsSnapshot();
+    res.json(snapshot);
+  } catch (error) {
+    const message = error?.message || String(error);
+    res.status(500).json({
+      ok: false,
+      collectedAt: new Date().toISOString(),
+      source: 'system',
+      warnings: [],
+      errors: [message],
+      host: {
+        hostname: require('os').hostname(),
+        uptime: null,
+        cpuPercent: null,
+        ramUsed: null,
+        ramTotal: null,
+        ramPercent: null,
+        diskUsedPercent: null,
+      },
+      containers: [],
+      docker: {
+        total: null,
+        healthy: null,
+        unhealthy: null,
+      },
+    });
+  }
+});
+
 app.get('/api/vps', async (req, res) => {
   try {
-    const [cpuStr, ramStr, diskStr, uptime, containersRaw, fail2banOutput] = await Promise.all([
-      run("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'"),
-      run("free -h | grep Mem | awk '{print $3\"/\"$2}'"),
-      run("df -h / | tail -1 | awk '{print $5}'"),
-      run("uptime -p"),
-      run('docker ps --format "{{.Names}}: {{.Status}}"') || '',
-      run("fail2ban-client status sshd") || ''
-    ]);
-
-    // Parse containers into structured array with safe fallback
-    let containers = [];
-    if (containersRaw && containersRaw !== 'N/A' && containersRaw.trim()) {
-      containers = containersRaw.split('\n')
-        .filter(line => line.trim() && line.includes(':'))
-        .map(line => {
-          const parts = line.split(':');
-          const name = parts[0]?.trim() || '';
-          const statusRaw = parts.slice(1).join(':').trim();
-          const parts2 = statusRaw.split('(');
-          const status = parts2[0]?.trim() || 'Unknown';
-          const healthy = statusRaw.toLowerCase().includes('healthy') || statusRaw.toLowerCase().includes('up');
-          return { name, status, healthy };
-        });
-    }
-
-    // Parse CPU/RAM/Disk as numbers with fallback
-    const cpu = parseFloat(cpuStr) || 0;
-    const ramStrParts = (ramStr || '--/--').split('/');
-    const ramUsed = parseFloat(ramStrParts[0]?.replace(/[^\d.]/g, '')) || 0;
-    const ramTotal = parseFloat(ramStrParts[1]?.replace(/[^\d.]/g, '')) || 1;
-    const ram = Math.round((ramUsed / ramTotal) * 100);
-    const ramRaw = ramStr || '0/0';
-    const disk = parseFloat(diskStr) || 0;
-
-    // Parse fail2ban output to get banned count and list
-    let bannedCount = '0';
-    let bannedList = [];
-    if (fail2banOutput && fail2banOutput !== 'N/A') {
-      const lines = fail2banOutput.split('\n');
-      let inBannedList = false;
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('Currently banned:')) {
-          const match = trimmed.match(/Currently banned:\s*(\d+)/);
-          if (match) bannedCount = match[1];
-        }
-        if (trimmed === 'Banned IP list:') {
-          inBannedList = true;
-          continue;
-        }
-        if (inBannedList) {
-          if (trimmed === '' || trimmed.startsWith('|-') || trimmed.startsWith('`-')) {
-            inBannedList = false;
-            continue;
-          }
-          const ipMatches = trimmed.match(/([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})/g);
-          if (ipMatches) {
-            bannedList.push(...ipMatches);
-          }
-        }
-      }
-      bannedList = [...new Set(bannedList)];
-    }
-
-    res.json({
-      cpu,
-      ram,
-      ramRaw,
-      disk,
-      uptime,
-      containers,
-      banned: bannedCount,
-      bannedList
-    });
+    const snapshot = await getVpsSnapshot();
+    const fail2ban = await getFail2banBanned();
+    res.json(toLegacyVpsPayload(snapshot, fail2ban));
   } catch (error) {
     console.error('Error in /api/vps:', error);
-    res.json({
+    const message = error?.message || String(error);
+    res.status(500).json({
       cpu: 0,
       ram: 0,
       ramRaw: '0/0',
@@ -1271,7 +1246,127 @@ app.get('/api/vps', async (req, res) => {
       uptime: 'N/A',
       containers: [],
       banned: '0',
-      bannedList: []
+      bannedList: [],
+      warnings: [],
+      errors: [message],
+    });
+  }
+});
+
+app.get('/api/fail2ban/stats', async (req, res) => {
+  try {
+    res.json(await getFail2banStats());
+  } catch (error) {
+    const message = error?.message || String(error);
+    res.status(500).json({
+      ok: false,
+      collectedAt: new Date().toISOString(),
+      source: 'fail2ban',
+      warnings: [],
+      errors: [message],
+      totalBanned: null,
+      bannedCount: null,
+      currentBannedCount: null,
+      jailsActive: null,
+    });
+  }
+});
+
+app.get('/api/fail2ban/jails', async (req, res) => {
+  try {
+    res.json(await getFail2banJails());
+  } catch (error) {
+    const message = error?.message || String(error);
+    res.status(500).json({
+      ok: false,
+      collectedAt: new Date().toISOString(),
+      source: 'fail2ban',
+      warnings: [],
+      errors: [message],
+      jailsActive: null,
+      jails: [],
+    });
+  }
+});
+
+app.get('/api/fail2ban/banned', async (req, res) => {
+  try {
+    res.json(await getFail2banBanned());
+  } catch (error) {
+    const message = error?.message || String(error);
+    res.status(500).json({
+      ok: false,
+      collectedAt: new Date().toISOString(),
+      source: 'fail2ban',
+      warnings: [],
+      errors: [message],
+      totalBanned: null,
+      bannedCount: null,
+      currentBannedCount: null,
+      bannedList: [],
+    });
+  }
+});
+
+app.get('/api/fail2ban/history', async (req, res) => {
+  try {
+    res.json(await getFail2banHistory());
+  } catch (error) {
+    const message = error?.message || String(error);
+    res.status(500).json({
+      ok: false,
+      collectedAt: new Date().toISOString(),
+      source: 'fail2ban.log',
+      retentionLimited: true,
+      warnings: [],
+      errors: [message],
+      files: [],
+      firstSeenAt: null,
+      lastSeenAt: null,
+      totalUniqueIps: 0,
+      history: [],
+    });
+  }
+});
+
+app.get('/api/fail2ban/logs', async (req, res) => {
+  try {
+    res.json(await getFail2banHistory());
+  } catch (error) {
+    const message = error?.message || String(error);
+    res.status(500).json({
+      ok: false,
+      collectedAt: new Date().toISOString(),
+      source: 'fail2ban.log',
+      retentionLimited: true,
+      warnings: [],
+      errors: [message],
+      files: [],
+      firstSeenAt: null,
+      lastSeenAt: null,
+      totalUniqueIps: 0,
+      history: [],
+    });
+  }
+});
+
+app.get('/api/fail2ban/seen', async (req, res) => {
+  try {
+    res.json(await getFail2banHistory());
+  } catch (error) {
+    const message = error?.message || String(error);
+    res.status(500).json({
+      ok: false,
+      collectedAt: new Date().toISOString(),
+      source: 'fail2ban.log',
+      retentionLimited: true,
+      warnings: [],
+      errors: [message],
+      files: [],
+      firstSeenAt: null,
+      lastSeenAt: null,
+      totalUniqueIps: 0,
+      history: [],
     });
   }
 });
@@ -2153,6 +2248,58 @@ app.get('/api/sessions', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get('/api/memory/index', (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      ...getMemoryIndex(),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/memory/latest', (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      ...getLatestMemory(),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/memory/day/:day', (req, res) => {
+  try {
+    const result = getMemoryDay(req.params.day);
+    if (result?.error) {
+      return res.status(result.status || 400).json({ error: result.error });
+    }
+    res.json({
+      ok: true,
+      ...result,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/memory/day/:day/:agent', (req, res) => {
+  try {
+    const result = getMemoryEntry(req.params.day, req.params.agent);
+    if (result?.error) {
+      return res.status(result.status || 400).json({ error: result.error });
+    }
+    res.json({
+      ok: true,
+      ...result,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/diary?date=YYYY-MM-DD - Returns aggregated diary data for a given date
 app.get('/api/diary', async (req, res) => {
   try {
@@ -2270,23 +2417,8 @@ const io = new Server(server, {
 // VPS update interval - send updates every 5 seconds
 setInterval(async () => {
   try {
-    const [cpu, ram, disk, uptime, containers, fail2ban] = await Promise.all([
-      run("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'"),
-      run("free -h | grep Mem | awk '{print $3\"/\"$2}'"),
-      run("df -h / | tail -1 | awk '{print $5}'"),
-      run("uptime -p"),
-      run('docker ps --format "{{.Names}}: {{.Status}}"'),
-      run("fail2ban-client status sshd | grep 'Currently banned' | awk '{print $NF}'")
-    ]);
-
-    io.emit('vps-update', {
-      cpu,
-      ram,
-      disk,
-      uptime,
-      containers,
-      banned: fail2ban || '0'
-    });
+    const [snapshot, fail2ban] = await Promise.all([getVpsSnapshot(), getFail2banBanned()]);
+    io.emit('vps-update', toLegacyVpsPayload(snapshot, fail2ban));
   } catch (error) {
     console.error('Error updating VPS data:', error);
   }
