@@ -44,6 +44,9 @@ const Metric = ({ icon: Icon, label, value, raw, tone }: {
   </div>
 );
 
+const formatPercent = (value: number | null): string => (typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}%` : "—");
+const formatMemory = (used: string | null, total: string | null): string => (used && total ? `${used}/${total}` : "—");
+
 export const SystemStatusPanel = ({ onSeeFail2ban, onSeeVps }: Props) => {
   const [snapshot, setSnapshot] = useState<VpsSnapshotResponse | null>(null);
   const [fail2ban, setFail2ban] = useState<Fail2banStats | null>(null);
@@ -112,21 +115,21 @@ export const SystemStatusPanel = ({ onSeeFail2ban, onSeeVps }: Props) => {
           icon={Cpu}
           label="CPU"
           value={host?.cpuPercent ?? null}
-          raw={host?.cpuPercent === null ? "—" : `${host.cpuPercent.toFixed(1)}%`}
+          raw={formatPercent(host?.cpuPercent ?? null)}
           tone={toneFor(host?.cpuPercent ?? null)}
         />
         <Metric
           icon={MemoryStick}
           label="RAM"
           value={host?.ramPercent ?? null}
-          raw={host?.ramUsed && host?.ramTotal ? `${host.ramUsed}/${host.ramTotal}` : "—"}
+          raw={formatMemory(host?.ramUsed ?? null, host?.ramTotal ?? null)}
           tone={toneFor(host?.ramPercent ?? null)}
         />
         <Metric
           icon={HardDrive}
           label="Disco"
           value={host?.diskUsedPercent ?? null}
-          raw={host?.diskUsedPercent === null ? "—" : `${host.diskUsedPercent.toFixed(1)}%`}
+          raw={formatPercent(host?.diskUsedPercent ?? null)}
           tone={toneFor(host?.diskUsedPercent ?? null)}
         />
       </div>

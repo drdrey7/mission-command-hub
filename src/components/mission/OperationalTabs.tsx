@@ -29,6 +29,9 @@ const Metric = ({ icon: Icon, label, value, raw, tone }: { icon: typeof Cpu; lab
   </div>
 );
 
+const formatPercent = (value: number | null): string => (typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)}%` : "—");
+const formatMemory = (used: string | null, total: string | null): string => (used && total ? `${used}/${total}` : "—");
+
 interface Props {
   value: string;
   onValueChange: (v: string) => void;
@@ -135,21 +138,21 @@ export const OperationalTabs = ({ value, onValueChange }: Props) => {
                       icon={Cpu}
                       label="CPU"
                       value={host?.cpuPercent ?? null}
-                      raw={host?.cpuPercent === null ? "—" : `${host.cpuPercent.toFixed(1)}%`}
+                      raw={formatPercent(host?.cpuPercent ?? null)}
                       tone={(host?.cpuPercent ?? 0) > 85 ? "offline" : (host?.cpuPercent ?? 0) > 65 ? "warning" : "accent"}
                     />
                     <Metric
                       icon={MemoryStick}
                       label="RAM"
                       value={host?.ramPercent ?? null}
-                      raw={host?.ramUsed && host?.ramTotal ? `${host.ramUsed}/${host.ramTotal}` : "—"}
+                      raw={formatMemory(host?.ramUsed ?? null, host?.ramTotal ?? null)}
                       tone={(host?.ramPercent ?? 0) > 85 ? "offline" : (host?.ramPercent ?? 0) > 65 ? "warning" : "accent"}
                     />
                     <Metric
                       icon={HardDrive}
                       label="Disco"
                       value={host?.diskUsedPercent ?? null}
-                      raw={host?.diskUsedPercent === null ? "—" : `${host.diskUsedPercent.toFixed(1)}%`}
+                      raw={formatPercent(host?.diskUsedPercent ?? null)}
                       tone={(host?.diskUsedPercent ?? 0) > 85 ? "offline" : (host?.diskUsedPercent ?? 0) > 65 ? "warning" : "accent"}
                     />
                   </div>

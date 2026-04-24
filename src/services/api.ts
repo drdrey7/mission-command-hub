@@ -503,9 +503,56 @@ export interface VpsSnapshotResponse {
   docker: VpsDockerSnapshot;
 }
 
+const emptyVpsSnapshot: VpsSnapshotResponse = {
+  ok: false,
+  collectedAt: new Date().toISOString(),
+  source: "system",
+  warnings: [],
+  errors: [],
+  host: {
+    hostname: "—",
+    uptime: null,
+    cpuPercent: null,
+    ramUsed: null,
+    ramTotal: null,
+    ramPercent: null,
+    diskUsedPercent: null,
+  },
+  containers: [],
+  docker: { total: null, healthy: null, unhealthy: null },
+};
+
+function normalizeVpsSnapshotResponse(data: unknown): VpsSnapshotResponse {
+  const raw = (data && typeof data === "object") ? data as Partial<VpsSnapshotResponse> : {};
+  const hostRaw = raw.host && typeof raw.host === "object" ? raw.host as Partial<VpsHostSnapshot> : {};
+  return {
+    ...emptyVpsSnapshot,
+    ...raw,
+    warnings: Array.isArray(raw.warnings) ? raw.warnings.filter((item): item is string => typeof item === "string") : [],
+    errors: Array.isArray(raw.errors) ? raw.errors.filter((item): item is string => typeof item === "string") : [],
+    host: {
+      hostname: typeof hostRaw.hostname === "string" && hostRaw.hostname.trim() ? hostRaw.hostname : "—",
+      uptime: typeof hostRaw.uptime === "string" ? hostRaw.uptime : null,
+      cpuPercent: typeof hostRaw.cpuPercent === "number" && Number.isFinite(hostRaw.cpuPercent) ? hostRaw.cpuPercent : null,
+      ramUsed: typeof hostRaw.ramUsed === "string" ? hostRaw.ramUsed : null,
+      ramTotal: typeof hostRaw.ramTotal === "string" ? hostRaw.ramTotal : null,
+      ramPercent: typeof hostRaw.ramPercent === "number" && Number.isFinite(hostRaw.ramPercent) ? hostRaw.ramPercent : null,
+      diskUsedPercent: typeof hostRaw.diskUsedPercent === "number" && Number.isFinite(hostRaw.diskUsedPercent) ? hostRaw.diskUsedPercent : null,
+    },
+    containers: Array.isArray(raw.containers)
+      ? raw.containers.filter((container): container is VpsContainerSnapshot => Boolean(container && typeof container === "object"))
+      : [],
+    docker: {
+      total: typeof raw.docker?.total === "number" && Number.isFinite(raw.docker.total) ? raw.docker.total : null,
+      healthy: typeof raw.docker?.healthy === "number" && Number.isFinite(raw.docker.healthy) ? raw.docker.healthy : null,
+      unhealthy: typeof raw.docker?.unhealthy === "number" && Number.isFinite(raw.docker.unhealthy) ? raw.docker.unhealthy : null,
+    },
+  };
+}
+
 export const getVpsSnapshot = (): Promise<VpsSnapshotResponse> => {
   if (USE_MOCK) {
-    return delay({
+    return delay(normalizeVpsSnapshotResponse({
       ok: true,
       collectedAt: new Date().toISOString(),
       source: "system",
@@ -522,9 +569,9 @@ export const getVpsSnapshot = (): Promise<VpsSnapshotResponse> => {
       },
       containers: [],
       docker: { total: 0, healthy: 0, unhealthy: 0 },
-    });
+    }));
   }
-  return http<VpsSnapshotResponse>("/api/vps/snapshot");
+  return http<unknown>("/api/vps/snapshot").then(normalizeVpsSnapshotResponse);
 };
 export type VpsAction = "restart" | "snapshot" | "scale";
 export const vpsAction = (id: string, action: VpsAction) =>
