@@ -61,6 +61,14 @@ Rebuild — `USE_MOCK` flips to `false` automatically when the URL is set.
 Types in `src/data/mockData.ts` and `src/services/api.ts`.
 Auth: `Authorization: Bearer <token>` from env or `localStorage.openclaw_token`.
 
+### Task execution store
+
+The task list itself stays in `TASKS.md`, but execution history is persisted separately in:
+
+`/root/.openclaw/projects/mission-control/data/task-executions.json`
+
+That store keeps per-`taskId` execution runs, session keys, session ids, follow-up events, and timestamps so completed tasks can be reopened without losing their history.
+
 ## 4. Features
 
 - 🛩️ Agent cards with orbiting plane + live flight timer

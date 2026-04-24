@@ -48,9 +48,143 @@ export interface TaskItem {
   taskId?: string | null;
   agentId?: string | null;
   sessionKey?: string | null;
+  sessionId?: string | null;
   runId?: string | null;
   dispatchStatus?: string | null;
   conclusion?: string | null;
+  currentSection?: string | null;
+  currentStatus?: string | null;
+  currentText?: string | null;
+}
+
+export interface TaskExecutionTokenStats {
+  input?: number | null;
+  output?: number | null;
+  total?: number | null;
+  totalFresh?: number | null;
+  cacheRead?: number | null;
+  cacheWrite?: number | null;
+}
+
+export interface TaskExecutionRun {
+  id: string;
+  recordedAt?: string;
+  runId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
+  status?: string | null;
+  section?: string | null;
+  instruction?: string | null;
+  prompt?: string | null;
+  conclusion?: string | null;
+  summary?: Array<Record<string, unknown>>;
+  sessionFile?: string | null;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  updatedAt?: string | null;
+  runtimeMs?: number | null;
+  tokens?: TaskExecutionTokenStats | null;
+  provider?: string | null;
+  model?: string | null;
+  source?: string | null;
+}
+
+export interface TaskExecutionEvent {
+  id: string;
+  at?: string;
+  type: string;
+  fromSection?: string | null;
+  toSection?: string | null;
+  text?: string | null;
+  prompt?: string | null;
+  agentId?: string | null;
+  sessionKey?: string | null;
+  runId?: string | null;
+  status?: string | null;
+  error?: string | null;
+  note?: string | null;
+}
+
+export interface TaskExecutionSession {
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  status?: string | null;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  updatedAt?: string | null;
+  runtimeMs?: number | null;
+  tokens?: TaskExecutionTokenStats;
+  sessionFile?: string | null;
+  summary?: Array<Record<string, unknown>>;
+  finalResult?: string | null;
+}
+
+export interface TaskExecutionRecord {
+  taskId?: string;
+  title?: string;
+  currentText?: string | null;
+  currentSection?: string | null;
+  currentStatus?: string | null;
+  currentAgentId?: string | null;
+  currentSessionKey?: string | null;
+  currentRunId?: string | null;
+  currentSessionId?: string | null;
+  currentConclusion?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  deletedAt?: string | null;
+  history?: TaskExecutionRun[];
+  events?: TaskExecutionEvent[];
+}
+
+export interface TaskDetailTask extends TaskItem {
+  boardSection?: TaskSectionKey | null;
+  currentSection?: string | null;
+  currentStatus?: string | null;
+  currentText?: string | null;
+}
+
+export interface TaskDetailResponse {
+  ok: boolean;
+  storePath?: string;
+  task: TaskDetailTask;
+  record?: TaskExecutionRecord | null;
+  history: TaskExecutionRun[];
+  events: TaskExecutionEvent[];
+  currentRun?: TaskExecutionRun | null;
+  session?: TaskExecutionSession | null;
+  boardSections?: Record<TaskSectionKey, TaskItem[]> | null;
+}
+
+export interface TaskDetailPayload {
+  task: TaskDetailTask;
+  record?: TaskExecutionRecord | null;
+  history: TaskExecutionRun[];
+  events: TaskExecutionEvent[];
+  currentRun?: TaskExecutionRun | null;
+  session?: TaskExecutionSession | null;
+  boardSections?: Record<TaskSectionKey, TaskItem[]> | null;
+}
+
+export interface TaskReopenInput {
+  text?: string;
+  instruction?: string;
+  section?: TaskSectionKey;
+}
+
+export interface TaskFollowUpInput {
+  instruction: string;
+  prompt: string;
+  agentId: string;
+  section?: TaskSectionKey;
+}
+
+export interface TaskActionResponse {
+  ok: boolean;
+  task: TaskDetailTask;
+  execution: TaskDetailPayload;
+  dispatch?: unknown;
 }
 
 export interface TasksSummary {
@@ -64,6 +198,48 @@ export interface TasksResponse {
   summary: TasksSummary;
   sections: Record<TaskSectionKey, TaskItem[]>;
   raw?: string;
+}
+
+export interface OpenClawStateAgent {
+  key: string;
+  id?: string;
+  name: string;
+  role?: string | null;
+  status: string;
+  executionStatus?: string | null;
+  sessions?: number;
+  sessionCount?: number;
+  lastActivity?: string | null;
+  lastActivityAt?: string | null;
+  currentTask?: string | null;
+  currentTaskId?: string | null;
+  currentSessionKey?: string | null;
+  currentSessionId?: string | null;
+  currentRunId?: string | null;
+  source?: string | null;
+}
+
+export interface OpenClawStateActivity {
+  id: string;
+  type?: string;
+  text: string;
+  source: string;
+  timestamp?: string | null;
+  severity?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  runId?: string | null;
+}
+
+export interface OpenClawState {
+  ok: boolean;
+  generatedAt?: string;
+  agents: OpenClawStateAgent[];
+  sessions: Array<Record<string, unknown>>;
+  activity: OpenClawStateActivity[];
+  errors?: string[];
+  warnings?: string[];
+  sources?: Record<string, unknown>;
 }
 
 export interface TaskMutationInput {
@@ -164,15 +340,20 @@ const delay = <T,>(v: T, ms = 250) => new Promise<T>((r) => setTimeout(() => r(v
 /* Agents */
 export const getAgents = async (): Promise<Agent[]> => {
   if (USE_MOCK) return delay(mockAgents);
-  const d = await http<any>("/api/agents");
+  const d = await http<OpenClawState>("/api/state");
   console.log("[getAgents] raw data:", d);
-  return d.agents.map((a: any) => ({
-    key: a.name as AgentKey,
-    name: a.name.charAt(0).toUpperCase() + a.name.slice(1),
-    role: "Agent",
-    status: a.lastActivity && new Date(a.lastActivity) > new Date(Date.now() - 3600000) ? "active" : "standby",
-    sessions: a.sessionCount,
-    lastActivity: a.lastActivity,
+  if ((!d.agents || d.agents.length === 0) && d.errors?.length) {
+    throw new Error(d.errors.join(" · "));
+  }
+  return (d.agents || []).map((a: OpenClawStateAgent) => ({
+    key: a.key as AgentKey,
+    name: a.name,
+    role: a.role || "Agent",
+    status: a.status as Agent["status"],
+    sessions: a.sessionCount ?? a.sessions ?? 0,
+    lastActivity: a.lastActivity ?? a.lastActivityAt ?? "—",
+    flightStartedAt: undefined,
+    currentTask: a.currentTask ?? undefined,
   }));
 };
 
@@ -247,6 +428,30 @@ export const editTask = (input: TaskEditInput) =>
     }),
   });
 
+export const getTaskDetails = (taskId: string) =>
+  http<TaskDetailResponse>(`/api/tasks/${taskId}/details`);
+
+export const reopenTask = (taskId: string, input?: TaskReopenInput) =>
+  http<TaskActionResponse>("/api/tasks/" + taskId + "/reopen", {
+    method: "POST",
+    body: JSON.stringify({
+      text: input?.text,
+      instruction: input?.instruction,
+      section: input?.section ? input.section : undefined,
+    }),
+  });
+
+export const followUpTask = (taskId: string, input: TaskFollowUpInput) =>
+  http<TaskActionResponse>("/api/tasks/" + taskId + "/follow-up", {
+    method: "POST",
+    body: JSON.stringify({
+      instruction: input.instruction,
+      prompt: input.prompt,
+      agentId: input.agentId,
+      section: input.section ? taskSectionApiLabel(input.section) : undefined,
+    }),
+  });
+
 /* Missions */
 export interface NewMissionInput {
   codename: string; objective: string; lead: AgentKey; squad: AgentKey[];
@@ -294,16 +499,18 @@ export const vpsAction = (id: string, action: VpsAction) =>
 /* Audit */
 export const getAuditTrail = (limit = 50): Promise<ActivityEvent[]> => {
   if (USE_MOCK) return delay(mockActivity);
-  return http<any[]>(`/api/activity?limit=${limit}`).then(data => {
+  return http<OpenClawState>(`/api/state?activityLimit=${limit}&sessionLimit=20`).then(data => {
     console.log("[getAuditTrail] raw data:", data);
-    // Backend returns [{"type":"log","text":"Ativou protocolo...","source":"CEO","timestamp":"06:33:43"}]
-    return data.map((e: any) => ({
+    const items = Array.isArray(data.activity) ? data.activity : [];
+    if (items.length === 0 && data.errors?.length) {
+      throw new Error(data.errors.join(" · "));
+    }
+    return items.map((e) => ({
       id: `audit-${Date.now()}-${Math.random()}`,
       type: e.type || "log",
-      text: e.text || e.message || "",
+      text: e.text || "",
       source: e.source || "sistema",
-      timestamp: e.timestamp || new Date().toISOString(),
-      severity: e.severity || "info",
+      time: e.timestamp || new Date().toISOString(),
     }));
   });
 };

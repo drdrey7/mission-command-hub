@@ -7,6 +7,21 @@ const { exec, execFile } = require('child_process');
 const { randomUUID } = require('crypto');
 const http = require('http');
 const { Server } = require('socket.io');
+const {
+  STORE_PATH: TASK_EXECUTIONS_STORE_PATH,
+  loadStore: loadTaskExecutionStore,
+  saveStore: saveTaskExecutionStore,
+  ensureTaskRecord,
+  appendTaskEvent,
+  appendTaskRun,
+  removeTaskRecord,
+} = require('./task-execution-store');
+const {
+  buildOpenClawState,
+  sessionState: normalizeSessionState,
+  taskState: normalizeTaskState,
+  resolveTranscriptPath,
+} = require('./openclaw-state');
 
 const app = express();
 app.use(cors());
@@ -30,6 +45,7 @@ const TASKS_PATH = '/root/.openclaw/TASKS.md';
 const TASK_TASK_ID_COMMENT_RE = /<!--\s*mc-task-id:\s*([^>]+?)\s*-->/i;
 const TASK_AGENT_ID_COMMENT_RE = /<!--\s*mc-agent-id:\s*([^>]+?)\s*-->/i;
 const TASK_SESSION_KEY_COMMENT_RE = /<!--\s*mc-session-key:\s*([^>]+?)\s*-->/i;
+const TASK_SESSION_ID_COMMENT_RE = /<!--\s*mc-session-id:\s*([^>]+?)\s*-->/i;
 const TASK_RUN_ID_COMMENT_RE = /<!--\s*mc-run-id:\s*([^>]+?)\s*-->/i;
 const TASK_STATUS_COMMENT_RE = /<!--\s*mc-dispatch-status:\s*([^>]+?)\s*-->/i;
 const TASK_CONCLUSION_COMMENT_RE = /<!--\s*mc-conclusion:\s*([^>]+?)\s*-->/i;
@@ -84,6 +100,40 @@ function isTaskCompleted(task) {
   return normalizeDispatchStatus(task.dispatchStatus) === 'completed';
 }
 
+function normalizeExecutionTaskStatus(value) {
+  const normalized = normalizeTaskState(value);
+  if (normalized === 'completed') return 'completed';
+  if (normalized === 'error') return 'error';
+  if (normalized === 'in_progress') return 'in_progress';
+  return 'idle';
+}
+
+function summarySectionForTask(task, record = null) {
+  const status = normalizeExecutionTaskStatus(record?.currentStatus || task?.currentStatus || task?.dispatchStatus);
+  if (status === 'completed') return 'completed';
+  if (status === 'in_progress') return 'inProgress';
+  return 'standby';
+}
+
+function mergeTaskExecutionView(task, record = null) {
+  const currentStatus = normalizeExecutionTaskStatus(record?.currentStatus || task.currentStatus || task.dispatchStatus);
+  const currentSection = record?.currentSection || task.currentSection || task.section || null;
+  return {
+    ...task,
+    boardSection: task.section,
+    section: task.section,
+    currentSection,
+    currentStatus,
+    currentText: record?.currentText || task.currentText || task.text || null,
+    currentAgentId: record?.currentAgentId || task.agentId || null,
+    currentSessionKey: record?.currentSessionKey || task.sessionKey || null,
+    currentSessionId: record?.currentSessionId || task.sessionId || null,
+    currentRunId: record?.currentRunId || task.runId || null,
+    currentConclusion: record?.currentConclusion || task.conclusion || null,
+    dispatchStatus: normalizeDispatchStatus(task.dispatchStatus) || (currentStatus === 'in_progress' ? 'dispatched' : currentStatus === 'completed' ? 'completed' : currentStatus === 'error' ? 'failed' : task.dispatchStatus || null),
+  };
+}
+
 function sectionLabel(sectionKey, fallbackLabel) {
   return TASK_SECTION_META[sectionKey]?.label || fallbackLabel || sectionKey;
 }
@@ -106,6 +156,7 @@ function parseTaskComments(text) {
     taskId: null,
     agentId: null,
     sessionKey: null,
+    sessionId: null,
     runId: null,
     dispatchStatus: null,
     conclusion: null,
@@ -115,6 +166,7 @@ function parseTaskComments(text) {
   const taskId = raw.match(TASK_TASK_ID_COMMENT_RE)?.[1]?.trim();
   const agentId = raw.match(TASK_AGENT_ID_COMMENT_RE)?.[1]?.trim();
   const sessionKey = raw.match(TASK_SESSION_KEY_COMMENT_RE)?.[1]?.trim();
+  const sessionId = raw.match(TASK_SESSION_ID_COMMENT_RE)?.[1]?.trim();
   const runId = raw.match(TASK_RUN_ID_COMMENT_RE)?.[1]?.trim();
   const dispatchStatus = raw.match(TASK_STATUS_COMMENT_RE)?.[1]?.trim();
   const conclusion = raw.match(TASK_CONCLUSION_COMMENT_RE)?.[1]?.trim();
@@ -122,6 +174,7 @@ function parseTaskComments(text) {
   if (taskId) parsed.taskId = taskId;
   if (agentId) parsed.agentId = agentId;
   if (sessionKey) parsed.sessionKey = sessionKey;
+  if (sessionId) parsed.sessionId = sessionId;
   if (runId) parsed.runId = runId;
   if (dispatchStatus) parsed.dispatchStatus = dispatchStatus;
   if (conclusion) parsed.conclusion = conclusion;
@@ -133,6 +186,7 @@ function buildTaskComments(task) {
   if (task.taskId) comments.push(`<!-- mc-task-id: ${task.taskId} -->`);
   if (task.agentId) comments.push(`<!-- mc-agent-id: ${task.agentId} -->`);
   if (task.sessionKey) comments.push(`<!-- mc-session-key: ${task.sessionKey} -->`);
+  if (task.sessionId) comments.push(`<!-- mc-session-id: ${task.sessionId} -->`);
   if (task.runId) comments.push(`<!-- mc-run-id: ${task.runId} -->`);
   if (task.dispatchStatus) comments.push(`<!-- mc-dispatch-status: ${task.dispatchStatus} -->`);
   if (task.conclusion) {
@@ -146,7 +200,11 @@ function generateTaskId() {
   return `mc-${randomUUID()}`;
 }
 
-function toTaskSessionKey(agentId, taskId) {
+function toAgentSessionKey(agentId) {
+  return `agent:${agentId}:main`;
+}
+
+function toTaskSessionId(agentId, taskId) {
   return `agent:${agentId}:mc-task:${taskId}`;
 }
 
@@ -169,6 +227,7 @@ function parseTaskLine(line, sectionKey, index) {
     taskId: meta.taskId,
     agentId: meta.agentId,
     sessionKey: meta.sessionKey,
+    sessionId: meta.sessionId,
     runId: meta.runId,
     dispatchStatus: meta.dispatchStatus,
     conclusion: meta.conclusion,
@@ -229,7 +288,7 @@ function parseTasksMarkdown(markdown) {
   return document;
 }
 
-function collectTasks(document) {
+function collectTasks(document, executionStore = null) {
   const summary = {
     standby: 0,
     inProgress: 0,
@@ -249,8 +308,12 @@ function collectTasks(document) {
 
     for (const entry of block.entries) {
       if (entry.kind !== 'task') continue;
-      sections[sectionKey].push({ ...entry.task });
-      summary[sectionKey] += 1;
+      const task = { ...entry.task };
+      const record = executionStore?.tasks?.[task.taskId] || null;
+      const mergedTask = mergeTaskExecutionView(task, record);
+      const liveSection = summarySectionForTask(mergedTask, record);
+      sections[liveSection].push(mergedTask);
+      summary[liveSection] += 1;
       summary.total += 1;
     }
   }
@@ -316,6 +379,7 @@ function loadTasksDocument() {
     saveTasksDocument(document);
     document.raw = rebuildMarkdown(document);
   }
+  syncTaskExecutionStoreFromDocument(document);
   return document;
 }
 
@@ -422,6 +486,7 @@ function updateTaskEntryMetadata(task, patch = {}) {
   if (patch.taskId !== undefined) task.taskId = patch.taskId;
   if (patch.agentId !== undefined) task.agentId = patch.agentId;
   if (patch.sessionKey !== undefined) task.sessionKey = patch.sessionKey;
+  if (patch.sessionId !== undefined) task.sessionId = patch.sessionId;
   if (patch.runId !== undefined) task.runId = patch.runId;
   if (patch.dispatchStatus !== undefined) task.dispatchStatus = patch.dispatchStatus;
   if (patch.conclusion !== undefined) task.conclusion = patch.conclusion;
@@ -460,6 +525,36 @@ function findSessionRecordByKey(sessionKey) {
   return null;
 }
 
+function findSessionRecordById(sessionId) {
+  if (!sessionId) return null;
+  const agentsRoot = '/root/.openclaw/agents';
+  if (!fs.existsSync(agentsRoot)) return null;
+
+  for (const agentId of fs.readdirSync(agentsRoot)) {
+    const storePath = path.join(agentsRoot, agentId, 'sessions', 'sessions.json');
+    const store = readJsonFileSafe(storePath);
+    if (!store || typeof store !== 'object') continue;
+
+    for (const [sessionKey, record] of Object.entries(store)) {
+      if (!record || typeof record !== 'object') continue;
+      if (String(record.sessionId || '').trim() !== String(sessionId).trim()) continue;
+
+      return {
+        agentId,
+        storePath,
+        sessionKey,
+        ...record,
+      };
+    }
+  }
+
+  return null;
+}
+
+function findSessionRecord(sessionKey, sessionId = null) {
+  return findSessionRecordByKey(sessionKey) || findSessionRecordById(sessionId);
+}
+
 function extractFinalAssistantText(sessionFilePath) {
   if (!sessionFilePath || !fs.existsSync(sessionFilePath)) return null;
 
@@ -489,8 +584,8 @@ function extractFinalAssistantText(sessionFilePath) {
 }
 
 function resolveTaskConclusion(task) {
-  if (!task?.sessionKey) return null;
-  const sessionRecord = findSessionRecordByKey(task.sessionKey);
+  if (!task?.sessionKey && !task?.sessionId) return null;
+  const sessionRecord = findSessionRecord(task.sessionKey, task.sessionId);
   if (!sessionRecord) return null;
 
   const sessionStatus = String(sessionRecord.status || '').trim().toLowerCase();
@@ -505,9 +600,300 @@ function resolveTaskConclusion(task) {
       : null,
   ].filter((candidate) => typeof candidate === 'string' && candidate.trim());
 
-  const sessionFilePath = candidateSessionFiles.find((candidate) => fs.existsSync(candidate)) || null;
+  let sessionFilePath = candidateSessionFiles.find((candidate) => fs.existsSync(candidate)) || null;
+  if (!sessionFilePath) {
+    sessionFilePath = resolveTranscriptPath(sessionRecord.sessionFile || sessionRecord.sessionPath || sessionRecord.filePath || null, sessionRecord.agentId || null, sessionRecord.sessionId ? `${sessionRecord.sessionId}.jsonl` : null);
+  }
 
   return extractFinalAssistantText(sessionFilePath);
+}
+
+function normalizeTimestampValue(value) {
+  if (!value) return null;
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return new Date(value).toISOString();
+  return null;
+}
+
+function summarizeSessionTranscript(sessionFilePath, limit = 12) {
+  if (!sessionFilePath || !fs.existsSync(sessionFilePath)) return [];
+
+  const entries = [];
+  const lines = fs.readFileSync(sessionFilePath, 'utf8').split(/\r?\n/);
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    const timestamp = normalizeTimestampValue(entry?.timestamp) || null;
+
+    if (entry?.type === 'message') {
+      const role = entry?.message?.role || 'unknown';
+      const content = Array.isArray(entry?.message?.content) ? entry.message.content : [];
+      const text = content
+        .filter((part) => part && part.type === 'text' && typeof part.text === 'string' && part.text.trim())
+        .map((part) => part.text.trim())
+        .join('\n\n')
+        .trim();
+
+      entries.push({
+        type: 'message',
+        role,
+        timestamp,
+        text: text.slice(0, 600),
+      });
+      continue;
+    }
+
+    if (entry?.type === 'custom') {
+      entries.push({
+        type: 'custom',
+        customType: entry.customType || 'custom',
+        timestamp,
+        summary: typeof entry.data === 'string'
+          ? entry.data.slice(0, 400)
+          : JSON.stringify(entry.data || {}).slice(0, 400),
+      });
+      continue;
+    }
+  }
+
+  return entries.slice(-limit);
+}
+
+function buildTaskRunFromBoard(task, sessionRecord = null) {
+  const sessionFilePath = resolveTranscriptPath(
+    sessionRecord?.sessionFile || sessionRecord?.sessionPath || sessionRecord?.filePath || null,
+    sessionRecord?.agentId || task?.agentId || null,
+    sessionRecord?.sessionId ? `${sessionRecord.sessionId}.jsonl` : null,
+  ) || sessionRecord?.sessionFile
+    || sessionRecord?.sessionPath
+    || sessionRecord?.filePath
+    || (sessionRecord?.sessionId && sessionRecord?.storePath
+      ? path.join(path.dirname(sessionRecord.storePath), `${sessionRecord.sessionId}.jsonl`)
+      : null);
+  const finalText = resolveTaskConclusion(task);
+  const summary = summarizeSessionTranscript(sessionFilePath, 10);
+
+  return {
+    runId: task.runId || sessionRecord?.sessionId || null,
+    sessionKey: task.sessionKey || null,
+    sessionId: task.sessionId || sessionRecord?.sessionId || null,
+    agentId: task.agentId || sessionRecord?.agentId || null,
+    status: normalizeExecutionTaskStatus(task.currentStatus || task.dispatchStatus || (task.section === 'completed' ? 'completed' : 'idle')),
+    section: task.section || null,
+    instruction: task.text || null,
+    prompt: task.text || null,
+    conclusion: finalText || task.conclusion || null,
+    summary,
+    sessionFile: sessionFilePath,
+    startedAt: normalizeTimestampValue(sessionRecord?.startedAt) || null,
+    endedAt: normalizeTimestampValue(sessionRecord?.endedAt) || null,
+    updatedAt: normalizeTimestampValue(sessionRecord?.updatedAt) || null,
+    runtimeMs: typeof sessionRecord?.runtimeMs === 'number' ? sessionRecord.runtimeMs : null,
+    tokens: {
+      input: typeof sessionRecord?.inputTokens === 'number' ? sessionRecord.inputTokens : null,
+      output: typeof sessionRecord?.outputTokens === 'number' ? sessionRecord.outputTokens : null,
+      total: typeof sessionRecord?.totalTokens === 'number' ? sessionRecord.totalTokens : null,
+      totalFresh: typeof sessionRecord?.totalTokensFresh === 'number' ? sessionRecord.totalTokensFresh : null,
+      cacheRead: typeof sessionRecord?.cacheRead === 'number' ? sessionRecord.cacheRead : null,
+      cacheWrite: typeof sessionRecord?.cacheWrite === 'number' ? sessionRecord.cacheWrite : null,
+    },
+    provider: sessionRecord?.modelProvider || null,
+    model: sessionRecord?.model || null,
+    source: 'board-sync',
+  };
+}
+
+function syncTaskExecutionStoreFromDocument(document) {
+  let changed = false;
+  const store = loadTaskExecutionStore();
+
+  for (const block of document.blocks) {
+    if (!block.canonicalSection) continue;
+
+    for (const entry of block.entries) {
+      if (entry.kind !== 'task') continue;
+      const task = entry.task;
+      const taskId = task.taskId;
+      if (!taskId) continue;
+
+      const record = ensureTaskRecord(store, taskId, {
+        title: task.text,
+        currentText: task.text,
+        currentSection: null,
+        currentStatus: null,
+        currentAgentId: task.agentId || null,
+        currentSessionKey: task.sessionKey || null,
+        currentSessionId: task.sessionId || null,
+        currentRunId: task.runId || null,
+        currentConclusion: task.conclusion || null,
+        boardSection: task.section || block.canonicalSection,
+      });
+
+      if (!record) continue;
+
+      const nextText = task.text || record.currentText || '';
+      if (record.currentText !== nextText) {
+        record.currentText = nextText;
+        changed = true;
+      }
+      if (record.title !== nextText) {
+        record.title = nextText;
+        changed = true;
+      }
+      if (record.boardSection !== task.section) {
+        record.boardSection = task.section;
+        changed = true;
+      }
+      const boardStatus = task.checked === true || task.section === 'completed'
+        ? 'completed'
+        : task.dispatchStatus
+          ? normalizeExecutionTaskStatus(task.dispatchStatus)
+          : task.section === 'inProgress'
+            ? 'in_progress'
+            : 'idle';
+      if (!record.currentStatus || (record.currentStatus === 'idle' && boardStatus !== 'idle')) {
+        record.currentStatus = boardStatus;
+        changed = true;
+      } else {
+        const normalizedStatus = normalizeExecutionTaskStatus(record.currentStatus);
+        if (normalizedStatus !== record.currentStatus) {
+          record.currentStatus = normalizedStatus;
+          changed = true;
+        }
+      }
+      if (record.currentAgentId !== (task.agentId || null)) {
+        record.currentAgentId = task.agentId || null;
+        changed = true;
+      }
+      if (record.currentSessionKey !== (task.sessionKey || null)) {
+        record.currentSessionKey = task.sessionKey || null;
+        changed = true;
+      }
+      if (record.currentSessionId !== (task.sessionId || null)) {
+        record.currentSessionId = task.sessionId || null;
+        changed = true;
+      }
+      if (record.currentRunId !== (task.runId || null)) {
+        record.currentRunId = task.runId || null;
+        changed = true;
+      }
+      if (record.currentConclusion !== (task.conclusion || null)) {
+        record.currentConclusion = task.conclusion || null;
+        changed = true;
+      }
+
+      const sessionRecord = findSessionRecord(task.sessionKey, task.sessionId);
+      const sessionKey = task.sessionKey || null;
+      const sessionId = task.sessionId || null;
+      const existingRunIndex = sessionKey
+        ? record.history.findIndex((run) => run.sessionKey === sessionKey || (task.runId && run.runId === task.runId))
+        : -1;
+      const shouldSyncRun = Boolean(sessionKey) || task.section === 'completed' || Boolean(task.dispatchStatus);
+      const hasExecutionFingerprint = Boolean(sessionKey || sessionId || task.runId);
+
+      if (shouldSyncRun && existingRunIndex === -1 && (hasExecutionFingerprint || record.history.length === 0)) {
+        appendTaskRun(store, taskId, buildTaskRunFromBoard(task, sessionRecord));
+        changed = true;
+      } else if (existingRunIndex !== -1) {
+        const existingRun = record.history[existingRunIndex];
+        const finalText = resolveTaskConclusion(task);
+        let runChanged = false;
+
+        const nextRunPatch = {
+          status: normalizeDispatchStatus(task.dispatchStatus) || existingRun.status,
+          section: task.section || existingRun.section || null,
+          currentSection: task.section || existingRun.currentSection || null,
+          currentStatus: normalizeDispatchStatus(task.dispatchStatus) || task.section || existingRun.currentStatus || null,
+          instruction: task.text || existingRun.instruction || null,
+          conclusion: finalText || task.conclusion || existingRun.conclusion || null,
+          sessionId: sessionRecord?.sessionId || existingRun.sessionId || null,
+          sessionFile: sessionRecord?.sessionFile || existingRun.sessionFile || null,
+          startedAt: normalizeTimestampValue(sessionRecord?.startedAt) || existingRun.startedAt || null,
+          endedAt: normalizeTimestampValue(sessionRecord?.endedAt) || existingRun.endedAt || null,
+          updatedAt: normalizeTimestampValue(sessionRecord?.updatedAt) || existingRun.updatedAt || null,
+        };
+
+        for (const [key, value] of Object.entries(nextRunPatch)) {
+          if (existingRun[key] !== value) {
+            existingRun[key] = value;
+            runChanged = true;
+          }
+        }
+
+        if (runChanged) changed = true;
+      }
+    }
+  }
+
+  if (changed) saveTaskExecutionStore(store);
+  return store;
+}
+
+function buildTaskDetailPayload(task, record, boardDocument) {
+  const history = Array.isArray(record?.history) ? [...record.history] : [];
+  const events = Array.isArray(record?.events) ? [...record.events] : [];
+  const currentRun = history.length ? history[history.length - 1] : null;
+  const taskBoardSessionRecord = findSessionRecord(task?.sessionKey, task?.sessionId);
+  const currentSessionRecord = taskBoardSessionRecord
+    || (currentRun?.sessionKey ? findSessionRecord(currentRun.sessionKey, currentRun.sessionId) : null);
+
+  return {
+    task: {
+      ...task,
+      boardSection: task.section,
+      currentSection: record?.currentSection || task.section || null,
+      currentStatus: normalizeExecutionTaskStatus(record?.currentStatus || task.dispatchStatus || task.section),
+      currentText: record?.currentText || task.text || null,
+      taskId: task.taskId || task.id,
+      sessionId: record?.currentSessionId || task.sessionId || null,
+    },
+    record: record || null,
+    history,
+    events,
+    currentRun,
+    session: currentSessionRecord || currentRun
+      ? {
+          sessionKey: task.sessionKey || currentRun?.sessionKey || currentSessionRecord?.sessionKey || null,
+          sessionId: currentSessionRecord?.sessionId || currentRun?.sessionId || task.sessionId || null,
+          status: currentSessionRecord?.status || currentRun?.status || task.dispatchStatus || null,
+          startedAt: normalizeTimestampValue(currentSessionRecord?.startedAt || currentRun?.startedAt) || null,
+          endedAt: normalizeTimestampValue(currentSessionRecord?.endedAt || currentRun?.endedAt) || null,
+          updatedAt: normalizeTimestampValue(currentSessionRecord?.updatedAt || currentRun?.updatedAt) || null,
+          runtimeMs: currentSessionRecord?.runtimeMs ?? currentRun?.runtimeMs ?? null,
+          tokens: {
+            input: currentSessionRecord?.inputTokens ?? currentRun?.tokens?.input ?? null,
+            output: currentSessionRecord?.outputTokens ?? currentRun?.tokens?.output ?? null,
+            total: currentSessionRecord?.totalTokens ?? currentRun?.tokens?.total ?? null,
+            totalFresh: currentSessionRecord?.totalTokensFresh ?? currentRun?.tokens?.totalFresh ?? null,
+            cacheRead: currentSessionRecord?.cacheRead ?? currentRun?.tokens?.cacheRead ?? null,
+            cacheWrite: currentSessionRecord?.cacheWrite ?? currentRun?.tokens?.cacheWrite ?? null,
+          },
+          sessionFile: currentSessionRecord?.sessionFile || currentRun?.sessionFile || null,
+          summary: summarizeSessionTranscript(resolveTranscriptPath(
+            currentSessionRecord?.sessionFile || currentRun?.sessionFile || null,
+            currentSessionRecord?.agentId || currentRun?.agentId || task.agentId || null,
+            (currentSessionRecord?.sessionId || currentRun?.sessionId) ? `${currentSessionRecord?.sessionId || currentRun?.sessionId}.jsonl` : null,
+          ) || currentSessionRecord?.sessionFile || currentRun?.sessionFile || null, 10),
+          finalResult:
+            extractFinalAssistantText(resolveTranscriptPath(
+              currentSessionRecord?.sessionFile || currentRun?.sessionFile || null,
+              currentSessionRecord?.agentId || currentRun?.agentId || task.agentId || null,
+              (currentSessionRecord?.sessionId || currentRun?.sessionId) ? `${currentSessionRecord?.sessionId || currentRun?.sessionId}.jsonl` : null,
+            ) || currentSessionRecord?.sessionFile || currentRun?.sessionFile || null)
+            || currentRun?.conclusion
+            || task.conclusion
+            || null,
+        }
+      : null,
+    boardSections: boardDocument ? collectTasks(boardDocument, loadTaskExecutionStore()).sections : null,
+  };
 }
 
 function upsertTaskMetadata(document, taskId, patch) {
@@ -550,6 +936,20 @@ function buildOpenClawEnv() {
     env.OPENCLAW_GATEWAY_TOKEN = token;
   }
   return env;
+}
+
+function extractDispatchReplyText(parsed) {
+  const payloads = Array.isArray(parsed?.payloads) ? parsed.payloads : [];
+  const text = payloads
+    .map((payload) => String(payload?.text || '').trim())
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
+
+  if (!text) return '';
+  if (/^⚠️\s*Agent couldn't generate a response/i.test(text)) return '';
+  if (/^Agent couldn't generate a response/i.test(text)) return '';
+  return text;
 }
 
 function resolveOpenRouterApiKey() {
@@ -722,28 +1122,68 @@ async function runPromptGeneration(idea, context = {}) {
 async function runAgentDispatch(params) {
   const cli = resolveOpenClawCli();
   const args = [
-    'gateway',
-    'call',
     'agent',
+    '--agent',
+    params.agentId,
+    '--session-id',
+    params.sessionId,
+    '--message',
+    params.message,
     '--json',
-    '--params',
-    JSON.stringify({
-      message: params.message,
-      sessionKey: params.sessionKey,
-      idempotencyKey: params.idempotencyKey,
-      agentId: params.agentId,
-      deliver: false,
-    }),
   ];
-  const { stdout } = await execFileAsync(cli, args, {
+  if (params.thinking) {
+    args.push('--thinking', params.thinking);
+  }
+
+  console.info('[tasks][dispatch] sending', JSON.stringify({
+    agentId: params.agentId,
+    taskId: params.taskId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    idempotencyKey: params.idempotencyKey,
+  }));
+
+  const { stdout, stderr } = await execFileAsync(cli, args, {
     env: buildOpenClawEnv(),
-    timeout: 20000,
+    timeout: 120000,
   });
-  const parsed = JSON.parse(stdout || '{}');
-  return parsed;
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout || '{}');
+  } catch (error) {
+    throw new Error(`OpenClaw dispatch returned invalid JSON: ${String(error?.message || error)}`);
+  }
+
+  const replyText = extractDispatchReplyText(parsed);
+  const sessionMeta = parsed?.meta?.agentMeta || {};
+  const sessionKey = String(sessionMeta.sessionKey || params.sessionKey || '').trim() || null;
+  const sessionId = String(sessionMeta.sessionId || params.sessionId || '').trim() || null;
+
+  if (!replyText) {
+    const errorText = String(stderr || parsed?.error || parsed?.message || 'OpenClaw dispatch produced no reply');
+    throw new Error(errorText);
+  }
+
+  return {
+    ...parsed,
+    replyText,
+    sessionKey,
+    sessionId,
+  };
 }
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+app.get('/api/state', async (req, res) => {
+  try {
+    const activityLimit = Number(req.query?.activityLimit) || 100;
+    const sessionLimit = Number(req.query?.sessionLimit) || 100;
+    const state = await buildOpenClawState({ fetchImpl: fetch, token: getToken(), activityLimit, sessionLimit });
+    res.json(state);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.get('/api/vps', async (req, res) => {
   try {
@@ -839,7 +1279,8 @@ app.get('/api/vps', async (req, res) => {
 app.get('/api/tasks', (req, res) => {
   try {
     const document = loadTasksDocument();
-    const { summary, sections } = collectTasks(document);
+    const executionStore = loadTaskExecutionStore();
+    const { summary, sections } = collectTasks(document, executionStore);
     res.json({ summary, sections, raw: document.raw });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -885,13 +1326,18 @@ app.post('/api/tasks/dispatch', async (req, res) => {
 
     const document = loadTasksDocument();
     const taskId = providedTaskId || generateTaskId();
-    const sessionKey = toTaskSessionKey(agentId, taskId);
+    const runId = `task:${taskId}:run:${randomUUID()}`;
+    const sessionKey = toAgentSessionKey(agentId);
+    const sessionId = toTaskSessionId(agentId, taskId);
     const taskText = idea;
     const sectionBlock = findOrCreateSectionBlock(document, section);
     const existingTaskRef = findTaskEntryById(document, taskId);
     const targetTaskRef = existingTaskRef || { block: sectionBlock, index: -1, entry: null };
+    const executionStore = loadTaskExecutionStore();
+    const previousSection = existingTaskRef?.entry?.task?.section || null;
 
     let taskRecord = existingTaskRef?.entry?.task || null;
+    const hadTaskBefore = Boolean(taskRecord);
     if (!taskRecord) {
       taskRecord = {
         id: taskId,
@@ -902,7 +1348,10 @@ app.post('/api/tasks/dispatch', async (req, res) => {
         owner: inferTaskOwner(taskText),
         agentId,
         sessionKey,
+        sessionId,
+        runId,
         dispatchStatus: 'queued',
+        conclusion: null,
       };
       targetTaskRef.block.entries.push({
         kind: 'task',
@@ -921,26 +1370,124 @@ app.post('/api/tasks/dispatch', async (req, res) => {
       taskRecord.owner = inferTaskOwner(taskRecord.text);
       taskRecord.agentId = agentId;
       taskRecord.sessionKey = sessionKey;
+      taskRecord.sessionId = sessionId;
+      taskRecord.runId = runId;
       taskRecord.dispatchStatus = 'queued';
+      taskRecord.conclusion = null;
+      taskRecord.checked = false;
     }
 
+    const taskStoreRecord = ensureTaskRecord(executionStore, taskId, {
+      title: taskRecord.text,
+      currentText: taskRecord.text,
+      currentSection: section,
+      currentStatus: 'in_progress',
+      currentAgentId: agentId,
+      currentSessionKey: sessionKey,
+      currentSessionId: sessionId,
+      currentRunId: runId,
+      currentConclusion: null,
+      boardSection: section,
+    });
+    appendTaskEvent(executionStore, taskId, {
+      type: hadTaskBefore ? (previousSection === 'completed' ? 'reopened' : 'dispatch_requested') : 'created',
+      agentId,
+      sessionKey,
+      sessionId,
+      runId,
+      section,
+      text: taskRecord.text,
+      prompt,
+    });
+    if (taskStoreRecord) {
+      taskStoreRecord.currentText = taskRecord.text;
+      taskStoreRecord.currentSection = section;
+      taskStoreRecord.currentStatus = 'in_progress';
+      taskStoreRecord.currentAgentId = agentId;
+      taskStoreRecord.currentSessionKey = sessionKey;
+      taskStoreRecord.currentSessionId = sessionId;
+      taskStoreRecord.currentRunId = runId;
+      taskStoreRecord.currentConclusion = null;
+      taskStoreRecord.boardSection = section;
+    }
+    saveTaskExecutionStore(executionStore);
     saveTasksDocument(document);
 
     try {
       const dispatchResult = await runAgentDispatch({
         message: prompt,
         sessionKey,
-        idempotencyKey: `task:${taskId}:dispatch`,
+        sessionId,
+        idempotencyKey: runId,
         agentId,
+        taskId,
       });
+
+      const replyText = dispatchResult.replyText;
+      const completedSection = findOrCreateSectionBlock(document, 'completed');
+      if (taskRecord.section !== 'completed') {
+        const currentTaskRef = findTaskEntryById(document, taskId);
+        if (currentTaskRef && currentTaskRef.block !== completedSection) {
+          currentTaskRef.block.entries.splice(currentTaskRef.index, 1);
+          completedSection.entries.push({
+            kind: 'task',
+            task: taskRecord,
+          });
+        }
+      }
+
+      taskRecord.section = 'completed';
+      taskRecord.checked = true;
+      taskRecord.sessionKey = dispatchResult.sessionKey || sessionKey;
+      taskRecord.sessionId = dispatchResult.sessionId || sessionId;
+      taskRecord.runId = dispatchResult?.runId ? String(dispatchResult.runId) : runId;
+      taskRecord.dispatchStatus = 'completed';
+      taskRecord.conclusion = replyText;
 
       updateTaskEntryMetadata(taskRecord, {
         taskId,
         agentId,
-        sessionKey,
-        runId: dispatchResult?.runId ? String(dispatchResult.runId) : null,
-        dispatchStatus: normalizeDispatchStatus(dispatchResult?.status || 'accepted'),
+        sessionKey: dispatchResult.sessionKey || sessionKey,
+        sessionId: dispatchResult.sessionId || sessionId,
+        runId: dispatchResult?.runId ? String(dispatchResult.runId) : runId,
+        dispatchStatus: 'completed',
+        conclusion: replyText,
       });
+      appendTaskEvent(executionStore, taskId, {
+        type: 'completed',
+        agentId,
+        sessionKey: dispatchResult.sessionKey || sessionKey,
+        sessionId: dispatchResult.sessionId || sessionId,
+        runId: dispatchResult?.runId ? String(dispatchResult.runId) : runId,
+        section: 'completed',
+        status: 'completed',
+        text: taskRecord.text,
+        prompt,
+        note: 'Agent reply captured and task completed',
+      });
+      appendTaskRun(executionStore, taskId, {
+        runId: dispatchResult?.runId ? String(dispatchResult.runId) : runId,
+        sessionKey: dispatchResult.sessionKey || sessionKey,
+        sessionId: dispatchResult.sessionId || sessionId,
+        agentId,
+        status: 'completed',
+        section: 'completed',
+        instruction: taskRecord.text,
+        prompt,
+        conclusion: replyText,
+        currentText: taskRecord.text,
+        currentSection: 'completed',
+        currentStatus: 'completed',
+        startedAt: null,
+        endedAt: null,
+        updatedAt: null,
+        runtimeMs: null,
+        tokens: null,
+        provider: dispatchResult?.meta?.agentMeta?.provider || dispatchResult?.provider || null,
+        model: dispatchResult?.meta?.agentMeta?.model || dispatchResult?.model || null,
+        source: 'dispatch',
+      });
+      saveTaskExecutionStore(executionStore);
       saveTasksDocument(document);
 
       res.json({
@@ -953,8 +1500,42 @@ app.post('/api/tasks/dispatch', async (req, res) => {
         taskId,
         agentId,
         sessionKey,
+        sessionId,
         dispatchStatus: 'failed',
+        conclusion: null,
       });
+      appendTaskEvent(executionStore, taskId, {
+        type: 'dispatch_failed',
+        agentId,
+        sessionKey,
+        sessionId,
+        runId,
+        section,
+        error: String(dispatchError?.message || dispatchError),
+      });
+      appendTaskRun(executionStore, taskId, {
+        runId,
+        sessionKey,
+        sessionId,
+        agentId,
+        status: 'error',
+        section,
+        instruction: taskRecord?.text || taskText,
+        prompt,
+        conclusion: null,
+        currentText: taskRecord?.text || taskText,
+        currentSection: section,
+        currentStatus: 'error',
+        startedAt: null,
+        endedAt: null,
+        updatedAt: null,
+        runtimeMs: null,
+        tokens: null,
+        provider: null,
+        model: null,
+        source: 'dispatch',
+      });
+      saveTaskExecutionStore(executionStore);
       saveTasksDocument(document);
       throw dispatchError;
     }
@@ -986,9 +1567,23 @@ app.post('/api/tasks', (req, res) => {
       owner: inferTaskOwner(String(text).trim()),
     };
     sectionBlock.entries.push({
-      kind: 'task',
-      task: taskRecord,
+        kind: 'task',
+        task: taskRecord,
     });
+    const executionStore = loadTaskExecutionStore();
+    ensureTaskRecord(executionStore, resolvedTaskId, {
+      title: taskRecord.text,
+      currentText: taskRecord.text,
+      currentSection: normalizedSection,
+      currentStatus: 'idle',
+      boardSection: normalizedSection,
+    });
+    appendTaskEvent(executionStore, resolvedTaskId, {
+      type: 'created',
+      section: normalizedSection,
+      text: taskRecord.text,
+    });
+    saveTaskExecutionStore(executionStore);
     saveTasksDocument(document);
     res.json({ success: true, task: taskRecord });
   } catch (e) {
@@ -1034,6 +1629,19 @@ app.delete('/api/tasks', (req, res) => {
       return res.status(404).json({ error: 'Task not found in section' });
     }
 
+    const executionStore = loadTaskExecutionStore();
+    const deletedRecord = ensureTaskRecord(executionStore, String(taskId || '').trim(), {});
+    if (deletedRecord) {
+      deletedRecord.deletedAt = new Date().toISOString();
+    }
+    if (taskId) {
+      appendTaskEvent(executionStore, String(taskId).trim(), {
+        type: 'deleted',
+        section: normalizedSection || null,
+        text: String(text || '').trim() || null,
+      });
+    }
+    saveTaskExecutionStore(executionStore);
     saveTasksDocument(document);
     res.json({ success: true });
   } catch (e) {
@@ -1058,9 +1666,11 @@ app.patch('/api/tasks', (req, res) => {
       return res.status(404).json({ error: 'Tasks file not found' });
     }
     const document = loadTasksDocument();
+    const executionStore = loadTaskExecutionStore();
     let movedTask = null;
     let sourceBlock = null;
     let sourceIndex = null;
+    let previousSection = null;
 
     if (taskId) {
       const taskRef = findTaskEntryById(document, String(taskId).trim());
@@ -1068,6 +1678,7 @@ app.patch('/api/tasks', (req, res) => {
         movedTask = taskRef.entry.task;
         sourceBlock = taskRef.block;
         sourceIndex = taskRef.index;
+        previousSection = taskRef.entry.task.section || taskRef.block.canonicalSection || null;
         taskRef.block.entries.splice(taskRef.index, 1);
       }
     } else {
@@ -1078,6 +1689,7 @@ app.patch('/api/tasks', (req, res) => {
         movedTask = taskRef.entry.task;
         sourceBlock = block;
         sourceIndex = taskRef.index;
+        previousSection = taskRef.entry.task.section || block.canonicalSection || null;
         block.entries.splice(taskRef.index, 1);
         break;
       }
@@ -1098,6 +1710,13 @@ app.patch('/api/tasks', (req, res) => {
 
     if (targetSection) {
       movedTask.section = targetSection;
+      if (targetSection !== 'completed') {
+        movedTask.checked = false;
+        movedTask.sessionKey = null;
+        movedTask.runId = null;
+        movedTask.dispatchStatus = null;
+        movedTask.conclusion = null;
+      }
       const targetBlock = findOrCreateSectionBlock(document, targetSection);
       targetBlock.entries.push({
         kind: 'task',
@@ -1112,6 +1731,38 @@ app.patch('/api/tasks', (req, res) => {
       });
     }
 
+    const existingRecord = executionStore.tasks?.[movedTask.taskId || movedTask.id] || null;
+    const nextCurrentStatus = targetSection === 'completed'
+      ? 'completed'
+      : normalizeExecutionTaskStatus(existingRecord?.currentStatus || movedTask.currentStatus || 'idle');
+    const taskStoreRecord = ensureTaskRecord(executionStore, movedTask.taskId || movedTask.id, {
+      title: movedTask.text,
+      currentText: movedTask.text,
+      currentSection: existingRecord?.currentSection || movedTask.section || sourceSection || null,
+      currentStatus: nextCurrentStatus,
+      currentAgentId: movedTask.agentId || null,
+      currentSessionKey: movedTask.sessionKey || null,
+      currentRunId: movedTask.runId || null,
+      currentConclusion: movedTask.conclusion || null,
+      boardSection: movedTask.section || sourceSection || null,
+    });
+    if (taskStoreRecord) {
+      taskStoreRecord.currentText = movedTask.text;
+      taskStoreRecord.boardSection = movedTask.section || sourceSection || null;
+      taskStoreRecord.currentSection = existingRecord?.currentSection || taskStoreRecord.currentSection || movedTask.section || sourceSection || null;
+      taskStoreRecord.currentStatus = nextCurrentStatus;
+      taskStoreRecord.currentAgentId = movedTask.agentId || null;
+      taskStoreRecord.currentSessionKey = movedTask.sessionKey || null;
+      taskStoreRecord.currentRunId = movedTask.runId || null;
+      taskStoreRecord.currentConclusion = movedTask.conclusion || null;
+    }
+    appendTaskEvent(executionStore, movedTask.taskId || movedTask.id, {
+      type: hasTextUpdate ? 'edited' : (previousSection === 'completed' && targetSection !== 'completed' ? 'reopened' : 'moved'),
+      fromSection: previousSection,
+      toSection: targetSection || previousSection,
+      text: movedTask.text,
+    });
+    saveTaskExecutionStore(executionStore);
     saveTasksDocument(document);
     res.json({ success: true, task: movedTask });
   } catch (e) {
@@ -1119,51 +1770,369 @@ app.patch('/api/tasks', (req, res) => {
   }
 });
 
-app.get('/api/activity', (req, res) => {
+app.get('/api/tasks/:taskId/details', (req, res) => {
   try {
-    const path = '/root/.openclaw/projects/mission-control/data/mc-activity.json';
-    if (!fs.existsSync(path)) return res.json([]);
-    res.json(JSON.parse(fs.readFileSync(path, 'utf8')));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    const taskId = String(req.params.taskId || '').trim();
+    if (!taskId) {
+      return res.status(400).json({ error: 'taskId is required' });
+    }
+
+    const document = loadTasksDocument();
+    const taskRef = findTaskEntryById(document, taskId);
+    if (!taskRef) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const task = taskRef.entry.task;
+    const store = loadTaskExecutionStore();
+    const record = ensureTaskRecord(store, taskId, {
+      title: task.text,
+      currentText: task.text,
+      currentSection: task.section || taskRef.block.canonicalSection || null,
+      currentStatus: task.section || taskRef.block.canonicalSection || null,
+      currentAgentId: task.agentId || null,
+      currentSessionKey: task.sessionKey || null,
+      currentRunId: task.runId || null,
+      currentConclusion: task.conclusion || null,
+    });
+
+    if (record && (!Array.isArray(record.history) || record.history.length === 0) && (task.sessionKey || task.dispatchStatus || task.conclusion || task.section === 'completed')) {
+      appendTaskRun(store, taskId, buildTaskRunFromBoard(task, task.sessionKey ? findSessionRecordByKey(task.sessionKey) : null));
+      saveTaskExecutionStore(store);
+    }
+
+    const refreshedStore = loadTaskExecutionStore();
+    const refreshedRecord = refreshedStore.tasks?.[taskId] || record || null;
+    res.json({
+      ok: true,
+      storePath: TASK_EXECUTIONS_STORE_PATH,
+      ...buildTaskDetailPayload(task, refreshedRecord, document),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/tasks/:taskId/reopen', (req, res) => {
+  try {
+    const taskId = String(req.params.taskId || '').trim();
+    if (!taskId) {
+      return res.status(400).json({ error: 'taskId is required' });
+    }
+
+    const nextText = String(req.body?.text || req.body?.instruction || '').trim();
+    const targetSection = normalizeTaskSection(req.body?.section) || 'inProgress';
+    if (!targetSection) {
+      return res.status(400).json({ error: 'Invalid section' });
+    }
+
+    const document = loadTasksDocument();
+    const taskRef = findTaskEntryById(document, taskId);
+    if (!taskRef) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const task = taskRef.entry.task;
+    const previousSection = task.section || taskRef.block.canonicalSection || null;
+    if (nextText) {
+      task.text = nextText;
+      task.owner = inferTaskOwner(nextText);
+    }
+
+    task.checked = false;
+    task.section = targetSection;
+    if (targetSection !== 'completed') {
+      task.sessionKey = null;
+      task.runId = null;
+      task.dispatchStatus = null;
+      task.conclusion = null;
+    }
+
+    if (taskRef.block !== findOrCreateSectionBlock(document, targetSection)) {
+      taskRef.block.entries.splice(taskRef.index, 1);
+      findOrCreateSectionBlock(document, targetSection).entries.push({
+        kind: 'task',
+        task,
+      });
+    }
+
+    const store = loadTaskExecutionStore();
+    const record = ensureTaskRecord(store, taskId, {
+      title: task.text,
+      currentText: task.text,
+      currentSection: targetSection,
+      currentStatus: 'idle',
+      currentAgentId: task.agentId || null,
+      currentSessionKey: null,
+      currentRunId: null,
+      currentConclusion: null,
+      boardSection: targetSection,
+    });
+    if (record) {
+      record.currentText = task.text;
+      record.currentSection = targetSection;
+      record.currentStatus = 'idle';
+      record.currentSessionKey = null;
+      record.currentRunId = null;
+      record.currentConclusion = null;
+      record.currentAgentId = task.agentId || record.currentAgentId || null;
+      record.boardSection = targetSection;
+    }
+    appendTaskEvent(store, taskId, {
+      type: 'reopened',
+      fromSection: previousSection,
+      toSection: targetSection,
+      text: task.text,
+      note: nextText ? 'Text updated during reopen' : 'Reopened without text change',
+    });
+    saveTaskExecutionStore(store);
+    saveTasksDocument(document);
+    res.json({
+      ok: true,
+      task,
+      execution: buildTaskDetailPayload(task, record, document),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/tasks/:taskId/follow-up', async (req, res) => {
+  try {
+    const taskId = String(req.params.taskId || '').trim();
+    if (!taskId) {
+      return res.status(400).json({ error: 'taskId is required' });
+    }
+
+    const document = loadTasksDocument();
+    const taskRef = findTaskEntryById(document, taskId);
+    if (!taskRef) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    const task = taskRef.entry.task;
+    const previousSection = task.section || taskRef.block.canonicalSection || null;
+    const store = loadTaskExecutionStore();
+    const existingRecord = store.tasks?.[taskId] || null;
+    const agentId = String(req.body?.agentId || task.agentId || existingRecord?.currentAgentId || '').trim();
+    const instruction = String(req.body?.instruction || req.body?.idea || req.body?.text || task.text || '').trim();
+    const prompt = String(req.body?.prompt || '').trim() || instruction;
+    const section = normalizeTaskSection(req.body?.section) || 'inProgress';
+
+    if (!instruction || !prompt || !agentId) {
+      return res.status(400).json({ error: 'instruction, prompt and agentId are required' });
+    }
+
+    const runId = `task:${taskId}:run:${randomUUID()}`;
+    const sessionKey = toAgentSessionKey(agentId);
+    const sessionId = toTaskSessionId(agentId, taskId);
+
+    task.text = instruction;
+    task.owner = inferTaskOwner(instruction);
+    task.agentId = agentId;
+    task.checked = false;
+    task.section = section;
+    task.sessionKey = sessionKey;
+    task.sessionId = sessionId;
+    task.runId = null;
+    task.dispatchStatus = 'queued';
+    task.conclusion = null;
+    if (taskRef.block !== findOrCreateSectionBlock(document, section)) {
+      taskRef.block.entries.splice(taskRef.index, 1);
+      findOrCreateSectionBlock(document, section).entries.push({
+        kind: 'task',
+        task,
+      });
+    }
+
+    const record = ensureTaskRecord(store, taskId, {
+      title: instruction,
+      currentText: instruction,
+      currentSection: section,
+      currentStatus: 'in_progress',
+      currentAgentId: agentId,
+      currentSessionKey: sessionKey,
+      currentSessionId: sessionId,
+      currentRunId: runId,
+      currentConclusion: null,
+      boardSection: section,
+    });
+    appendTaskEvent(store, taskId, {
+      type: previousSection === 'completed' ? 'reopened' : 'follow_up_requested',
+      fromSection: previousSection,
+      toSection: section,
+      agentId,
+      sessionKey,
+      sessionId,
+      runId,
+      text: instruction,
+      prompt,
+    });
+    saveTaskExecutionStore(store);
+    saveTasksDocument(document);
+
+    try {
+      const dispatchResult = await runAgentDispatch({
+        message: prompt,
+        sessionKey,
+        sessionId,
+        idempotencyKey: runId,
+        agentId,
+        taskId,
+      });
+
+      const replyText = dispatchResult.replyText;
+      const completedSection = findOrCreateSectionBlock(document, 'completed');
+      if (task.section !== 'completed') {
+        const currentTaskRef = findTaskEntryById(document, taskId);
+        if (currentTaskRef && currentTaskRef.block !== completedSection) {
+          currentTaskRef.block.entries.splice(currentTaskRef.index, 1);
+          completedSection.entries.push({
+            kind: 'task',
+            task,
+          });
+        }
+      }
+
+      task.section = 'completed';
+      task.checked = true;
+      task.sessionKey = dispatchResult.sessionKey || sessionKey;
+      task.sessionId = dispatchResult.sessionId || sessionId;
+      task.runId = dispatchResult?.runId ? String(dispatchResult.runId) : runId;
+      task.dispatchStatus = 'completed';
+      task.conclusion = replyText;
+
+      updateTaskEntryMetadata(task, {
+        taskId,
+        agentId,
+        sessionKey: dispatchResult.sessionKey || sessionKey,
+        sessionId: dispatchResult.sessionId || sessionId,
+        runId: dispatchResult?.runId ? String(dispatchResult.runId) : runId,
+        dispatchStatus: 'completed',
+        conclusion: replyText,
+      });
+
+      appendTaskEvent(store, taskId, {
+        type: 'completed',
+        fromSection: previousSection,
+        toSection: 'completed',
+        agentId,
+        sessionKey: dispatchResult.sessionKey || sessionKey,
+        sessionId: dispatchResult.sessionId || sessionId,
+        runId: dispatchResult?.runId ? String(dispatchResult.runId) : runId,
+        status: 'completed',
+        text: task.text,
+        prompt,
+        note: 'Agent reply captured and task completed',
+      });
+      appendTaskRun(store, taskId, {
+        runId: dispatchResult?.runId ? String(dispatchResult.runId) : runId,
+        sessionKey: dispatchResult.sessionKey || sessionKey,
+        sessionId: dispatchResult.sessionId || sessionId,
+        agentId,
+        status: 'completed',
+        section: 'completed',
+        instruction,
+        prompt,
+        conclusion: replyText,
+        currentText: instruction,
+        currentSection: 'completed',
+        currentStatus: 'completed',
+        startedAt: null,
+        endedAt: null,
+        updatedAt: null,
+        runtimeMs: null,
+        tokens: null,
+        provider: dispatchResult?.meta?.agentMeta?.provider || dispatchResult?.provider || null,
+        model: dispatchResult?.meta?.agentMeta?.model || dispatchResult?.model || null,
+        source: 'follow-up',
+      });
+      saveTaskExecutionStore(store);
+      saveTasksDocument(document);
+
+      res.json({
+        ok: true,
+        task,
+        dispatch: dispatchResult,
+        execution: buildTaskDetailPayload(task, record, document),
+      });
+    } catch (dispatchError) {
+      updateTaskEntryMetadata(task, {
+        taskId,
+        agentId,
+        sessionKey,
+        sessionId,
+        dispatchStatus: 'failed',
+        conclusion: null,
+      });
+      appendTaskEvent(store, taskId, {
+        type: 'dispatch_failed',
+        fromSection: previousSection,
+        toSection: section,
+        agentId,
+        sessionKey,
+        sessionId,
+        runId,
+        error: String(dispatchError?.message || dispatchError),
+      });
+      appendTaskRun(store, taskId, {
+        runId,
+        sessionKey,
+        sessionId,
+        agentId,
+        status: 'error',
+        section,
+        instruction,
+        prompt,
+        conclusion: null,
+        currentText: instruction,
+        currentSection: section,
+        currentStatus: 'error',
+        startedAt: null,
+        endedAt: null,
+        updatedAt: null,
+        runtimeMs: null,
+        tokens: null,
+        provider: null,
+        model: null,
+        source: 'follow-up',
+      });
+      saveTaskExecutionStore(store);
+      saveTasksDocument(document);
+      throw dispatchError;
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/activity', (req, res) => {
+  buildOpenClawState({ fetchImpl: fetch, token: getToken(), activityLimit: Number(req.query?.limit) || 100, sessionLimit: 100 })
+    .then((state) => {
+      res.json({
+        ok: true,
+        generatedAt: state.generatedAt,
+        items: state.activity,
+        activity: state.activity,
+        errors: state.errors,
+        warnings: state.warnings,
+        sources: state.sources,
+      });
+    })
+    .catch((e) => res.status(500).json({ error: e.message }));
 });
 
 app.get('/api/agents', async (req, res) => {
   try {
-    const configPath = '/root/.openclaw/openclaw.json';
-    if (!fs.existsSync(configPath)) {
-      return res.status(500).json({ error: 'OpenClaw config not found' });
-    }
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const agentIds = (config.agents?.list || []).map(a => a.id).filter(Boolean);
-    const agents = [];
-    for (const id of agentIds) {
-      const sessionsPath = `/root/.openclaw/agents/${id}/sessions`;
-      let lastActivity = null;
-      let sessionCount = 0;
-      if (fs.existsSync(sessionsPath)) {
-        const allFiles = fs.readdirSync(sessionsPath);
-        const jsonlFiles = allFiles.filter(file => file.endsWith('.jsonl') && !file.includes('.deleted'));
-        sessionCount = jsonlFiles.length;
-        let latestTime = 0;
-        for (const file of jsonlFiles) {
-          const filePath = path.join(sessionsPath, file);
-          const stat = fs.statSync(filePath);
-          if (stat.mtimeMs > latestTime) {
-            latestTime = stat.mtimeMs;
-          }
-        }
-        if (latestTime > 0) {
-          lastActivity = new Date(latestTime).toISOString();
-        }
-      }
-      agents.push({
-        id,
-        name: id,
-        sessionCount,
-        lastActivity: lastActivity || null
-      });
-    }
-    res.json({ agents });
+    const state = await buildOpenClawState({ fetchImpl: fetch, token: getToken(), activityLimit: 50, sessionLimit: 100 });
+    res.json({
+      ok: true,
+      generatedAt: state.generatedAt,
+      agents: state.agents,
+      errors: state.errors,
+      warnings: state.warnings,
+      sources: state.sources,
+    });
   } catch (e) {
     console.error('Error in /api/agents:', e);
     res.status(500).json({ error: e.message });
@@ -1172,13 +2141,15 @@ app.get('/api/agents', async (req, res) => {
 
 app.get('/api/sessions', async (req, res) => {
   try {
-    const token = getToken();
-    const r = await fetch('http://localhost:18789/tools/invoke', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tool: 'sessions_list', args: { limit: 20 } })
+    const state = await buildOpenClawState({ fetchImpl: fetch, token: getToken(), activityLimit: 20, sessionLimit: Number(req.query?.limit) || 20 });
+    res.json({
+      ok: true,
+      generatedAt: state.generatedAt,
+      sessions: state.sessions,
+      errors: state.errors,
+      warnings: state.warnings,
+      sources: state.sources,
     });
-    res.json(await r.json());
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

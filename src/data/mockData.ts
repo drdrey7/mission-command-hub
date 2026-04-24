@@ -1,5 +1,5 @@
 export type AgentKey = "comandante" | "cyber" | "flow" | "ledger" | "agentmail";
-export type AgentStatus = "active" | "standby" | "idle" | "working";
+export type AgentStatus = "active" | "standby" | "idle" | "working" | "em_voo" | "taxiing" | "hangar" | "on_ground";
 
 export interface Agent {
   key: AgentKey;
@@ -88,17 +88,18 @@ export const systemMetrics: SystemMetric[] = [
 export interface ActivityEvent {
   id: string;
   text: string;
-  agent: AgentKey | "sistema";
+  source: AgentKey | "sistema";
   time: string;
+  agent?: AgentKey | "sistema";
 }
 
 export const recentActivity: ActivityEvent[] = [
-  { id: "a1", text: "Integração com ERP concluída com sucesso", agent: "flow", time: "09:41" },
-  { id: "a2", text: "Novo acesso de administrador detectado", agent: "cyber", time: "09:38" },
-  { id: "a3", text: "Aprovação de orçamento realizada", agent: "comandante", time: "09:33" },
-  { id: "a4", text: "Lançamento contábil importado", agent: "ledger", time: "09:28" },
-  { id: "a5", text: "Backup diário finalizado", agent: "sistema", time: "03:00" },
-  { id: "a6", text: "Verificação de compliance executada", agent: "cyber", time: "02:14" },
+  { id: "a1", text: "Integração com ERP concluída com sucesso", source: "flow", agent: "flow", time: "09:41" },
+  { id: "a2", text: "Novo acesso de administrador detectado", source: "cyber", agent: "cyber", time: "09:38" },
+  { id: "a3", text: "Aprovação de orçamento realizada", source: "comandante", agent: "comandante", time: "09:33" },
+  { id: "a4", text: "Lançamento contábil importado", source: "ledger", agent: "ledger", time: "09:28" },
+  { id: "a5", text: "Backup diário finalizado", source: "sistema", agent: "sistema", time: "03:00" },
+  { id: "a6", text: "Verificação de compliance executada", source: "cyber", agent: "cyber", time: "02:14" },
 ];
 
 /* ---------- Tabs data ---------- */
