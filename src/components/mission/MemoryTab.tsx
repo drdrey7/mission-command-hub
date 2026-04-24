@@ -28,6 +28,8 @@ const AGENT_TONES: Record<RealAgent, string> = {
   ledger: "border-violet-500/30 bg-violet-500/8 text-violet-200",
 };
 
+type SelectedAgent = "all" | string;
+
 function normalizeAgent(agent: string) {
   return agent.trim().toLowerCase();
 }
@@ -60,7 +62,7 @@ export const MemoryTab = () => {
   const [index, setIndex] = useState<MemoryIndexResponse | null>(null);
   const [dayPayload, setDayPayload] = useState<MemoryDayResponse | null>(null);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
-  const [selectedAgent, setSelectedAgent] = useState<string>(REAL_AGENTS[0]);
+  const [selectedAgent, setSelectedAgent] = useState<SelectedAgent>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -81,6 +83,7 @@ export const MemoryTab = () => {
 
       const availableAgents = dedupeAgents(indexResponse, latestResponse);
       setSelectedAgent((current) => {
+        if (current === "all") return "all";
         const currentNormalized = normalizeAgent(current);
         return availableAgents.includes(currentNormalized)
           ? currentNormalized
@@ -107,6 +110,7 @@ export const MemoryTab = () => {
 
       const availableAgents = dedupeAgents(index, response);
       setSelectedAgent((current) => {
+        if (current === "all") return "all";
         const currentNormalized = normalizeAgent(current);
         return availableAgents.includes(currentNormalized)
           ? currentNormalized
@@ -138,15 +142,25 @@ export const MemoryTab = () => {
   const days = index?.days ?? [];
   const availableAgents = useMemo(() => dedupeAgents(index, dayPayload), [index, dayPayload]);
   const entries = dayPayload?.entries ?? [];
+  const filteredEntries = useMemo(() => {
+    if (selectedAgent === "all") return entries;
+    const target = normalizeAgent(selectedAgent);
+    return entries.filter((entry) => normalizeAgent(entry.agent) === target);
+  }, [entries, selectedAgent]);
+  const visibleEntries = useMemo(
+    () => (selectedAgent === "all" ? filteredEntries : filteredEntries.slice(0, 1)),
+    [filteredEntries, selectedAgent]
+  );
   const agentOrder = useMemo(
     () => {
       const realAgents = REAL_AGENTS.filter((agent) => availableAgents.includes(agent));
       const extras = availableAgents.filter((agent) => !REAL_AGENTS.includes(agent as RealAgent));
-      return [...realAgents, ...extras];
+      return ["all", ...realAgents, ...extras];
     },
     [availableAgents]
   );
   const activeDay = selectedDay ?? dayPayload?.day ?? index?.latestDay ?? null;
+  const emptyStateLabel = selectedAgent === "all" ? "Sem resumo disponível" : "Sem resumo desse agente";
 
   return (
     <div className="space-y-4">
@@ -220,7 +234,7 @@ export const MemoryTab = () => {
         <div className="text-[11px] uppercase tracking-wider text-muted-foreground">Agentes</div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {agentOrder.map((agent) => {
-            const label = AGENT_LABEL[agent as RealAgent] ?? agent;
+            const label = agent === "all" ? "Todos" : (AGENT_LABEL[agent as RealAgent] ?? agent);
             return (
               <button
                 key={agent}
@@ -237,10 +251,23 @@ export const MemoryTab = () => {
                   <span className="text-xs font-semibold uppercase tracking-wider text-foreground">
                     {label}
                   </span>
-                  <span className={cn("h-2 w-2 rounded-full", AGENT_TONES[agent as RealAgent] ? "bg-accent" : "bg-muted-foreground")} />
+                  <span
+                    className={cn(
+                      "h-2 w-2 rounded-full",
+                      agent === "all"
+                        ? "bg-muted-foreground"
+                        : AGENT_TONES[agent as RealAgent]
+                          ? "bg-accent"
+                          : "bg-muted-foreground"
+                    )}
+                  />
                 </div>
                 <p className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {getEntry(entries, agent)?.exists ? "resumo disponível" : "sem ficheiro"}
+                  {agent === "all"
+                    ? `${entries.length} resumo(s)`
+                    : getEntry(entries, agent)?.exists
+                      ? "resumo disponível"
+                      : "sem ficheiro"}
                 </p>
               </button>
             );
@@ -262,49 +289,57 @@ export const MemoryTab = () => {
       ) : null}
 
       {activeDay && agentOrder.length > 0 ? (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          {agentOrder.map((agent) => {
-            const entry = getEntry(entries, agent);
-            const label = AGENT_LABEL[agent as RealAgent] ?? agent;
-            const selected = selectedAgent === agent;
-            return (
-              <article
-                key={`${activeDay}-${agent}`}
-                className={cn(
-                  "rounded-2xl border bg-surface-2/40 p-4 shadow-sm transition-smooth",
-                  selected ? "border-accent/50 ring-1 ring-accent/20" : "border-border/60"
-                )}
-              >
-                <header className="mb-3 flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-bold text-foreground">{label}</p>
-                    <p className="mt-0.5 text-[11px] uppercase tracking-wider text-muted-foreground">
-                      {activeDay} · {entry?.mtime ? formatTimestamp(entry.mtime) : "sem atualização"}
-                    </p>
-                  </div>
-                  <span className={cn(
-                    "rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
-                    entry?.exists
-                      ? "border-status-online/40 bg-status-online/10 text-status-online"
-                      : "border-status-warning/40 bg-status-warning/10 text-status-warning"
-                  )}>
-                    {entry?.exists ? "ok" : "missing"}
-                  </span>
-                </header>
+        visibleEntries.length > 0 ? (
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            {visibleEntries.map((entry) => {
+              const agent = normalizeAgent(entry.agent);
+              const label = AGENT_LABEL[agent as RealAgent] ?? agent;
+              const selected = selectedAgent === "all" || selectedAgent === agent;
+              return (
+                <article
+                  key={`${activeDay}-${agent}`}
+                  className={cn(
+                    "rounded-2xl border bg-surface-2/40 p-4 shadow-sm transition-smooth",
+                    selected ? "border-accent/50 ring-1 ring-accent/20" : "border-border/60"
+                  )}
+                >
+                  <header className="mb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-bold text-foreground">{label}</p>
+                      <p className="mt-0.5 text-[11px] uppercase tracking-wider text-muted-foreground">
+                        {activeDay} · {entry?.mtime ? formatTimestamp(entry.mtime) : "sem atualização"}
+                      </p>
+                    </div>
+                    <span
+                      className={cn(
+                        "rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
+                        entry?.exists
+                          ? "border-status-online/40 bg-status-online/10 text-status-online"
+                          : "border-status-warning/40 bg-status-warning/10 text-status-warning"
+                      )}
+                    >
+                      {entry?.exists ? "ok" : "missing"}
+                    </span>
+                  </header>
 
-                {entry?.exists ? (
-                  <div className="prose prose-sm max-w-none prose-headings:font-display prose-headings:tracking-tight prose-p:my-2 prose-pre:my-3 prose-pre:overflow-x-auto prose-pre:rounded-xl prose-pre:border prose-pre:border-border/60 prose-pre:bg-surface-1/60 prose-pre:p-3 prose-code:rounded prose-code:bg-surface-1/80 prose-code:px-1 prose-code:py-0.5 prose-code:before:content-none prose-code:after:content-none">
-                    <ReactMarkdown>{entry.content}</ReactMarkdown>
-                  </div>
-                ) : (
-                  <div className="rounded-xl border border-dashed border-border/60 bg-surface-1/40 p-4 text-sm text-muted-foreground">
-                    Sem resumo desse dia
-                  </div>
-                )}
-              </article>
-            );
-          })}
-        </div>
+                  {entry?.exists ? (
+                    <div className="prose prose-sm max-w-none prose-headings:font-display prose-headings:tracking-tight prose-p:my-2 prose-pre:my-3 prose-pre:overflow-x-auto prose-pre:rounded-xl prose-pre:border prose-pre:border-border/60 prose-pre:bg-surface-1/60 prose-pre:p-3 prose-code:rounded prose-code:bg-surface-1/80 prose-code:px-1 prose-code:py-0.5 prose-code:before:content-none prose-code:after:content-none">
+                      <ReactMarkdown>{entry.content}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-border/60 bg-surface-1/40 p-4 text-sm text-muted-foreground">
+                      Sem resumo desse dia
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-border/60 p-8 text-center text-sm text-muted-foreground">
+            {emptyStateLabel}
+          </div>
+        )
       ) : (
         <div className="rounded-xl border border-dashed border-border/60 p-8 text-center text-sm text-muted-foreground">
           Sem resumo disponível
