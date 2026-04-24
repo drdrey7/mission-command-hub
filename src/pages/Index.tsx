@@ -7,7 +7,7 @@ import { SystemStatusPanel } from "@/components/mission/SystemStatusPanel";
 import { OperationalTabs } from "@/components/mission/OperationalTabs";
 import { CommandFooter } from "@/components/mission/CommandFooter";
 import { AgentChat } from "@/components/mission/AgentChat";
-import { getAgents } from "@/services/api";
+import { getOpenClawState } from "@/services/api";
 import type { Agent } from "@/data/mockData";
 
 const Index = () => {
@@ -16,14 +16,35 @@ const Index = () => {
   const [chatOpen, setChatOpen] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentError, setAgentError] = useState<string | null>(null);
+  const [openClawState, setOpenClawState] = useState<{
+    configuredAgents: number;
+    onlineAgents: number;
+    workingAgents: number;
+    activeAgentCount: number;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const loadAgents = async () => {
       try {
-        const next = await getAgents();
+        const state = await getOpenClawState();
         if (cancelled) return;
-        setAgents(next);
+        setAgents((state.agents || []).map((a) => ({
+          key: a.key as Agent["key"],
+          name: a.name,
+          role: a.role || "Agent",
+          status: a.status as Agent["status"],
+          sessions: a.sessionCount ?? a.sessions ?? 0,
+          lastActivity: a.lastActivity ?? a.lastActivityAt ?? "—",
+          flightStartedAt: undefined,
+          currentTask: a.currentTask ?? undefined,
+        })));
+        setOpenClawState({
+          configuredAgents: state.configuredAgents ?? state.configuredAgentCount ?? state.agents.length,
+          onlineAgents: state.onlineAgents ?? state.onlineAgentCount ?? 0,
+          workingAgents: state.workingAgents ?? state.workingAgentCount ?? state.activeAgentCount ?? 0,
+          activeAgentCount: state.activeAgentCount ?? state.workingAgents ?? state.workingAgentCount ?? 0,
+        });
         setAgentError(null);
       } catch (err) {
         if (!cancelled) setAgentError(err instanceof Error ? err.message : "Falha ao carregar agentes");
@@ -41,7 +62,9 @@ const Index = () => {
     };
   }, []);
 
-  const activeCount = agents.filter((a) => a.status === "em_voo" || a.status === "taxiing").length;
+  const configuredCount = openClawState?.configuredAgents ?? agents.length;
+  const onlineCount = openClawState?.onlineAgents ?? agents.length;
+  const workingCount = openClawState?.workingAgents ?? openClawState?.activeAgentCount ?? 0;
 
   const goTab = (t: string) => {
     setTab(t);
@@ -69,7 +92,7 @@ const Index = () => {
                 Esquadrão
               </h2>
               <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
-                {String(activeCount).padStart(2, "0")} / {String(agents.length).padStart(2, "0")} ativos
+                {String(onlineCount).padStart(2, "0")} / {String(configuredCount).padStart(2, "0")} online · {String(workingCount).padStart(2, "0")} working
               </span>
             </div>
             {agentError && (
