@@ -13,6 +13,10 @@
  *   GET    /notifications
  *   POST   /chat/:agent                   { messages }
  *   GET    /vps/snapshot                                            → VpsSnapshotResponse
+ *   GET    /notifications                                        → NotificationsFeedResponse
+ *   POST   /notifications/read                                   → NotificationReadResponse
+ *   GET    /chat/:agent                                          → ChatThreadResponse
+ *   POST   /chat/:agent                                          → ChatSendResponse
  *   GET    /fail2ban/stats                                          → Fail2banStats
  *   GET    /fail2ban/jails                                          → Fail2banJailsResponse
  *   GET    /fail2ban/banned                                         → Fail2banBannedResponse
@@ -619,35 +623,90 @@ export const getAuditTrail = (limit = 50): Promise<ActivityEvent[]> => {
 
 /* Notifications */
 export interface Notification {
-  id: string; title: string; body: string;
+  id: string;
+  title: string;
+  body: string;
   level: "info" | "warning" | "critical";
-  agent?: AgentKey | "sistema"; time: string; read?: boolean;
+  agent?: AgentKey | "sistema";
+  time: string;
+  timestamp?: string | null;
+  read?: boolean;
+  kind?: string | null;
+  source?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  runId?: string | null;
 }
-const mockNotifications: Notification[] = [
-  { id: "n1", title: "Skyhawk em voo", body: "Mission MX-001 progrediu para 64%.", level: "info", agent: "comandante", time: "agora" },
-  { id: "n2", title: "Pico de CPU", body: "openclaw-ai-04 atingiu 88% por 5 min.", level: "warning", agent: "cyber", time: "há 4 min" },
-  { id: "n3", title: "Fail2ban: 3 IPs banidos", body: "Tentativa de brute-force em sshd.", level: "warning", agent: "cyber", time: "há 8 min" },
-  { id: "n4", title: "Backup OK", body: "Snapshot diário concluído.", level: "info", agent: "sistema", time: "03:00" },
-];
-export const getNotifications = (): Promise<Notification[]> =>
-  USE_MOCK ? delay(mockNotifications) : http("/api/notifications");
+export interface NotificationsFeedResponse {
+  ok: boolean;
+  collectedAt: string;
+  source: string;
+  warnings: string[];
+  errors: string[];
+  totalCount: number;
+  unreadCount: number;
+  items: Notification[];
+  sources?: Record<string, unknown> | null;
+}
+
+export interface NotificationReadResponse {
+  ok: boolean;
+  readAt: string;
+  updatedCount: number;
+  readIds: string[];
+}
+
+export const getNotifications = (): Promise<NotificationsFeedResponse> =>
+  http<NotificationsFeedResponse>("/api/notifications");
+
+export const markNotificationsRead = (ids: string[] = []) =>
+  http<NotificationReadResponse>("/api/notifications/read", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  });
 
 /* Chat */
-export interface ChatMessage { role: "user" | "assistant"; content: string; }
-const cannedReplies: Record<AgentKey, string[]> = {
-  agentmail: ["Email processado e registrado.", "Solicitação concluída com sucesso."],
-  comandante: ["Confirmado. Estou a coordenar com o esquadrão e devolvo briefing em minutos.", "Aprovação registada. Vou priorizar isto na próxima janela operacional."],
-  cyber: ["A executar varredura. Detectei 0 anomalias críticas — relatório em 2 min.", "Política reforçada. MFA aplicado a todos os endpoints."],
-  flow: ["Workflow agendado. Próxima execução em 14:00.", "Integração validada. Stripe → Notion → ERP funcionando."],
-  ledger: ["Reconciliação iniciada. 142 lançamentos pendentes, ETA 18 min.", "Fechamento OK. Sem discrepâncias."],
-};
-export const sendChat = async (agent: AgentKey, messages: ChatMessage[]) => {
-  if (USE_MOCK) {
-    const pool = cannedReplies[agent];
-    return delay({ reply: pool[Math.floor(Math.random() * pool.length)] }, 700);
-  }
-  return http<{ reply: string }>(`/api/chat/${agent}`, { method: "POST", body: JSON.stringify({ messages }) });
-};
+export interface ChatMessage {
+  id?: string;
+  role: "user" | "assistant";
+  content: string;
+  at?: string | null;
+  source?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  status?: string | null;
+  error?: string | null;
+}
+
+export interface ChatThreadResponse {
+  ok: boolean;
+  collectedAt: string;
+  source: string;
+  warnings: string[];
+  errors: string[];
+  agentId: string;
+  agentName: string;
+  sessionKey: string | null;
+  sessionId: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  messageCount: number;
+  messages: ChatMessage[];
+}
+
+export interface ChatSendResponse extends ChatThreadResponse {
+  reply: string;
+  dispatch?: unknown;
+}
+
+export const getChatThread = (agent: AgentKey) =>
+  http<ChatThreadResponse>(`/api/chat/${agent}`);
+
+export const sendChat = async (agent: AgentKey, message: string) =>
+  http<ChatSendResponse>(`/api/chat/${agent}`, {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
 
 /* ----------------- Fail2ban ----------------- */
 export interface Fail2banJail {

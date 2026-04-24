@@ -23,6 +23,15 @@ const {
   resolveTranscriptPath,
 } = require('./openclaw-state');
 const {
+  getNotificationsFeed,
+  markNotificationsRead,
+} = require('./notifications-store');
+const {
+  peekConversation,
+  appendChatTurn,
+  normalizeAgentId: normalizeChatAgentId,
+} = require('./chat-store');
+const {
   getLatestMemory,
   getMemoryDay,
   getMemoryEntry,
@@ -45,14 +54,34 @@ function getToken() {
   try {
     const lines = fs.readFileSync('/root/openclaw/.env', 'utf8').split('\n');
     const line = lines.find(l => l.startsWith('OPENCLAW_GATEWAY_TOKEN='));
-    return line ? line.split('=')[1].trim() : 'default-token';
-  } catch { return 'default-token'; }
+    const token = line ? line.split('=')[1].trim() : '';
+    return token || null;
+  } catch { return null; }
 }
 
 function run(cmd) {
   return new Promise(resolve => {
     exec(cmd, (err, stdout) => resolve(err ? 'N/A' : stdout.trim()));
   });
+}
+
+function extractChatMessagePayload(body) {
+  const direct = String(body?.message || body?.text || '').trim();
+  if (direct) return direct;
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message || message.role !== 'user') continue;
+    const content = String(message.content || '').trim();
+    if (content) return content;
+  }
+  return '';
+}
+
+function findOpenClawAgentById(state, agentId) {
+  const normalized = String(agentId || '').trim().toLowerCase();
+  if (!normalized) return null;
+  return (Array.isArray(state?.agents) ? state.agents : []).find((agent) => String(agent.key || agent.id || '').trim().toLowerCase() === normalized) || null;
 }
 
 const TASKS_PATH = '/root/.openclaw/TASKS.md';
@@ -943,17 +972,27 @@ function execFileAsync(command, args, options = {}) {
   });
 }
 
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
 function buildOpenClawEnv() {
   const env = { ...process.env };
   const token = getToken();
   if (token) {
     env.OPENCLAW_GATEWAY_TOKEN = token;
+  } else {
+    delete env.OPENCLAW_GATEWAY_TOKEN;
   }
   return env;
 }
 
 function extractDispatchReplyText(parsed) {
-  const payloads = Array.isArray(parsed?.payloads) ? parsed.payloads : [];
+  const payloads = Array.isArray(parsed?.payloads)
+    ? parsed.payloads
+    : Array.isArray(parsed?.result?.payloads)
+      ? parsed.result.payloads
+      : [];
   const text = payloads
     .map((payload) => String(payload?.text || '').trim())
     .filter(Boolean)
@@ -1139,12 +1178,13 @@ async function runAgentDispatch(params) {
     'agent',
     '--agent',
     params.agentId,
-    '--session-id',
-    params.sessionId,
     '--message',
     params.message,
     '--json',
   ];
+  if (params.sessionId) {
+    args.push('--session-id', params.sessionId);
+  }
   if (params.thinking) {
     args.push('--thinking', params.thinking);
   }
@@ -1157,23 +1197,58 @@ async function runAgentDispatch(params) {
     idempotencyKey: params.idempotencyKey,
   }));
 
-  const { stdout, stderr } = await execFileAsync(cli, args, {
-    env: buildOpenClawEnv(),
-    timeout: 120000,
-  });
+  let stdout;
+  let stderr;
+  if (params.useLoginShell) {
+    const command = [cli, ...args.map(shellQuote)].join(' ');
+    ({ stdout, stderr } = await execFileAsync('bash', ['-lc', command], {
+      env: buildOpenClawEnv(),
+      timeout: 120000,
+    }));
+  } else {
+    ({ stdout, stderr } = await execFileAsync(cli, args, {
+      env: buildOpenClawEnv(),
+      timeout: 120000,
+    }));
+  }
   let parsed;
   try {
     parsed = JSON.parse(stdout || '{}');
   } catch (error) {
+    console.warn('[tasks][dispatch] invalid json stdout:', String(stdout || '').slice(0, 500));
+    console.warn('[tasks][dispatch] stderr:', String(stderr || '').slice(0, 500));
     throw new Error(`OpenClaw dispatch returned invalid JSON: ${String(error?.message || error)}`);
   }
 
   const replyText = extractDispatchReplyText(parsed);
   const sessionMeta = parsed?.meta?.agentMeta || {};
-  const sessionKey = String(sessionMeta.sessionKey || params.sessionKey || '').trim() || null;
-  const sessionId = String(sessionMeta.sessionId || params.sessionId || '').trim() || null;
+  const resultMeta = parsed?.result?.meta || {};
+  const sessionKey = String(
+    sessionMeta.sessionKey ||
+    resultMeta.systemPromptReport?.sessionKey ||
+    params.sessionKey ||
+    '',
+  ).trim() || null;
+  const sessionId = String(
+    sessionMeta.sessionId ||
+    resultMeta.agentMeta?.sessionId ||
+    params.sessionId ||
+    '',
+  ).trim() || null;
 
   if (!replyText) {
+    console.warn('[tasks][dispatch] no reply parsed:', JSON.stringify({
+      agentId: params.agentId,
+      sessionId: sessionId || null,
+      sessionKey: sessionKey || null,
+      status: parsed?.status || null,
+      summary: parsed?.summary || null,
+      stopReason: parsed?.result?.stopReason || parsed?.result?.completion?.stopReason || null,
+      finishReason: parsed?.result?.completion?.finishReason || null,
+      payloadCount: Array.isArray(parsed?.result?.payloads) ? parsed.result.payloads.length : null,
+      stdout: String(stdout || '').slice(0, 1000),
+      stderr: String(stderr || '').slice(0, 1000),
+    }));
     const errorText = String(stderr || parsed?.error || parsed?.message || 'OpenClaw dispatch produced no reply');
     throw new Error(errorText);
   }
@@ -1196,6 +1271,48 @@ app.get('/api/state', async (req, res) => {
     res.json(state);
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/notifications', async (req, res) => {
+  try {
+    const limit = Number(req.query?.limit) || 50;
+    const feed = await getNotificationsFeed({ fetchImpl: fetch, token: getToken(), limit });
+    res.json({
+      ok: true,
+      ...feed,
+    });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      collectedAt: new Date().toISOString(),
+      source: 'openclaw-activity',
+      warnings: [],
+      errors: [String(e?.message || e)],
+      totalCount: 0,
+      unreadCount: 0,
+      items: [],
+    });
+  }
+});
+
+app.post('/api/notifications/read', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const all = req.body?.all === true || req.body?.markAll === true;
+    if (!all && ids.length === 0) {
+      return res.status(400).json({ error: 'ids or all=true are required' });
+    }
+    const result = await markNotificationsRead({
+      ids,
+      all,
+      fetchImpl: fetch,
+      token: getToken(),
+      limit: Number(req.body?.limit) || 50,
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
   }
 });
 
@@ -2297,6 +2414,107 @@ app.get('/api/memory/day/:day/:agent', (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/chat/:agent', async (req, res) => {
+  try {
+    const agentId = normalizeChatAgentId(req.params.agent);
+    if (!agentId) {
+      return res.status(400).json({ error: 'Agent is required' });
+    }
+
+    const state = await buildOpenClawState({ fetchImpl: fetch, token: getToken(), activityLimit: 20, sessionLimit: 20 });
+    const agent = findOpenClawAgentById(state, agentId);
+    if (!agent) {
+      return res.status(404).json({ error: `Unknown agent: ${agentId}` });
+    }
+
+    const conversation = peekConversation(agentId);
+    res.json({
+      ok: true,
+      collectedAt: state.generatedAt || new Date().toISOString(),
+      source: 'chat-store',
+      warnings: Array.isArray(state.warnings) ? state.warnings : [],
+      errors: Array.isArray(state.errors) ? state.errors : [],
+      agentId,
+      agentName: agent.name || agentId,
+      sessionKey: conversation?.sessionKey || `agent:${agentId}:mc-chat`,
+      sessionId: conversation?.sessionId || `mc-chat:${agentId}`,
+      createdAt: conversation?.createdAt || null,
+      updatedAt: conversation?.updatedAt || null,
+      messages: conversation?.messages || [],
+      messageCount: conversation?.messageCount || 0,
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+app.post('/api/chat/:agent', async (req, res) => {
+  try {
+    const agentId = normalizeChatAgentId(req.params.agent);
+    if (!agentId) {
+      return res.status(400).json({ error: 'Agent is required' });
+    }
+
+    const message = extractChatMessagePayload(req.body);
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    const state = await buildOpenClawState({ fetchImpl: fetch, token: getToken(), activityLimit: 20, sessionLimit: 20 });
+    const agent = findOpenClawAgentById(state, agentId);
+    if (!agent) {
+      return res.status(404).json({ error: `Unknown agent: ${agentId}` });
+    }
+
+    const conversation = peekConversation(agentId);
+    const sessionKey = conversation?.messages?.length ? conversation.sessionKey || null : null;
+    const sessionId = conversation?.messages?.length ? conversation.sessionId || null : null;
+
+    const dispatchResult = await runAgentDispatch({
+      message,
+      sessionKey,
+      sessionId,
+      agentId,
+      useLoginShell: true,
+    });
+
+    const replyText = String(dispatchResult.replyText || '').trim();
+    if (!replyText) {
+      return res.status(500).json({ error: 'Agent returned an empty reply' });
+    }
+
+    const updatedConversation = appendChatTurn(agentId, {
+      userMessage: message,
+      assistantMessage: replyText,
+      sessionKey: dispatchResult.sessionKey || sessionKey,
+      sessionId: dispatchResult.sessionId || sessionId,
+      assistantMeta: {
+        provider: dispatchResult?.meta?.agentMeta?.provider || dispatchResult?.provider || null,
+        model: dispatchResult?.meta?.agentMeta?.model || dispatchResult?.model || null,
+        source: 'openclaw',
+      },
+    });
+
+    res.json({
+      ok: true,
+      collectedAt: new Date().toISOString(),
+      source: 'openclaw',
+      warnings: Array.isArray(state.warnings) ? state.warnings : [],
+      errors: Array.isArray(state.errors) ? state.errors : [],
+      agentId,
+      agentName: agent.name || agentId,
+      sessionKey: updatedConversation?.sessionKey || dispatchResult.sessionKey || sessionKey,
+      sessionId: updatedConversation?.sessionId || dispatchResult.sessionId || sessionId,
+      reply: replyText,
+      messages: updatedConversation?.messages || [],
+      messageCount: updatedConversation?.messageCount || 0,
+      dispatch: dispatchResult,
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
   }
 });
 

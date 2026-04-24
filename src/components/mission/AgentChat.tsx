@@ -3,10 +3,10 @@ import ReactMarkdown from "react-markdown";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { MessageSquare, Send, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2, MessageSquare, Send } from "lucide-react";
 import { AgentBadge } from "./AgentBadge";
 import type { AgentKey, Agent } from "@/data/mockData";
-import { sendChat, getAgents, ChatMessage } from "@/services/api";
+import { getAgents, getChatThread, sendChat, ChatMessage } from "@/services/api";
 import { cn } from "@/lib/utils";
 
 const AGENT_KEYS: AgentKey[] = ["comandante", "cyber", "flow", "ledger"];
@@ -30,7 +30,19 @@ export const AgentChat = ({ externalAgent, open: openProp, onOpenChange }: Agent
   const [active, setActive] = useState<AgentKey>("comandante");
   const [agents, setAgents] = useState<Agent[]>([]);
 
-  useEffect(() => { getAgents().then(setAgents); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    void getAgents()
+      .then((data) => {
+        if (!cancelled) setAgents(data);
+      })
+      .catch(() => {
+        if (!cancelled) setAgents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (externalAgent && AGENT_KEYS.includes(externalAgent as AgentKey)) {
@@ -43,6 +55,8 @@ export const AgentChat = ({ externalAgent, open: openProp, onOpenChange }: Agent
   });
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingThread, setLoadingThread] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const messages = byAgent[active];
@@ -51,16 +65,75 @@ export const AgentChat = ({ externalAgent, open: openProp, onOpenChange }: Agent
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadThread = async () => {
+      if (!open) return;
+      setLoadingThread(true);
+      try {
+        const thread = await getChatThread(active);
+        if (cancelled) return;
+        setByAgent((prev) => ({
+          ...prev,
+          [active]: Array.isArray(thread.messages)
+            ? thread.messages.map((msg) => ({
+                role: msg.role,
+                content: msg.content,
+                id: msg.id,
+                at: msg.at ?? null,
+                source: msg.source ?? null,
+                sessionKey: msg.sessionKey ?? null,
+                sessionId: msg.sessionId ?? null,
+                status: msg.status ?? null,
+                error: msg.error ?? null,
+              }))
+            : prev[active],
+        }));
+        setChatError(null);
+      } catch (err) {
+        if (!cancelled) {
+          setChatError(err instanceof Error ? err.message : "Falha ao carregar conversa");
+        }
+      } finally {
+        if (!cancelled) setLoadingThread(false);
+      }
+    };
+
+    void loadThread();
+    return () => {
+      cancelled = true;
+    };
+  }, [active, open]);
+
   const send = async () => {
     if (!input.trim() || loading) return;
-    const userMsg: ChatMessage = { role: "user", content: input.trim() };
+    const message = input.trim();
+    const userMsg: ChatMessage = { role: "user", content: message };
     const next = [...messages, userMsg];
     setByAgent((p) => ({ ...p, [active]: next }));
     setInput("");
     setLoading(true);
     try {
-      const { reply } = await sendChat(active, next);
-      setByAgent((p) => ({ ...p, [active]: [...next, { role: "assistant", content: reply }] }));
+      const response = await sendChat(active, message);
+      const hydrated = Array.isArray(response.messages) && response.messages.length > 0
+        ? response.messages.map((msg) => ({
+            role: msg.role,
+            content: msg.content,
+            id: msg.id,
+            at: msg.at ?? null,
+            source: msg.source ?? null,
+            sessionKey: msg.sessionKey ?? null,
+            sessionId: msg.sessionId ?? null,
+            status: msg.status ?? null,
+            error: msg.error ?? null,
+          }))
+        : [...next, { role: "assistant", content: response.reply }];
+      setByAgent((p) => ({ ...p, [active]: hydrated }));
+      setChatError(null);
+    } catch (err) {
+      setByAgent((p) => ({ ...p, [active]: messages }));
+      setInput(message);
+      setChatError(err instanceof Error ? err.message : "Falha ao enviar mensagem");
     } finally {
       setLoading(false);
     }
@@ -114,8 +187,23 @@ export const AgentChat = ({ externalAgent, open: openProp, onOpenChange }: Agent
           </div>
         </div>
 
+        {chatError && (
+          <div className="border-b border-status-offline/20 bg-status-offline/5 px-5 py-2 text-xs text-status-offline">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{chatError}</span>
+            </div>
+          </div>
+        )}
+
         <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
-          {messages.length === 0 && (
+          {loadingThread && messages.length === 0 && (
+            <div className="flex items-center gap-2 rounded-xl border border-dashed border-border/60 p-6 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              A carregar conversa real…
+            </div>
+          )}
+          {!loadingThread && messages.length === 0 && (
             <div className="rounded-xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
               Inicia a conversa com <span className="text-foreground">{agentName}</span>.
             </div>
@@ -133,6 +221,9 @@ export const AgentChat = ({ externalAgent, open: openProp, onOpenChange }: Agent
               <div className="prose prose-sm max-w-none dark:prose-invert prose-p:my-1">
                 <ReactMarkdown>{m.content}</ReactMarkdown>
               </div>
+              {m.status === "failed" && (
+                <p className="mt-1 text-[10px] uppercase tracking-wider text-status-offline">Falha ao enviar</p>
+              )}
             </div>
           ))}
           {loading && (
