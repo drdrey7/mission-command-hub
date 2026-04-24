@@ -30,7 +30,7 @@ export const Hero = () => {
         ]);
         if (cancelled) return;
         const active = agents.filter((a) => a.status === "em_voo" || a.status === "taxiing").length;
-        const banned = fail2ban.bannedCount ?? fail2ban.totalBanned;
+        const banned = fail2ban.currentBannedCount ?? fail2ban.bannedCount ?? fail2ban.totalBanned;
         setKpis([
           { label: "Agentes ativos", value: String(active).padStart(2, "0") },
           { label: "Tarefas", value: String(tasks.summary.total).padStart(2, "0") },

@@ -76,7 +76,7 @@ export const SystemStatusPanel = ({ onSeeFail2ban, onSeeVps }: Props) => {
   const host = snapshot?.host ?? null;
   const hostError = snapshot?.errors?.[0] ?? null;
   const fail2banError = fail2ban?.errors?.[0] ?? null;
-  const bannedCount = fail2ban?.bannedCount ?? fail2ban?.totalBanned ?? null;
+  const bannedCount = fail2ban?.currentBannedCount ?? fail2ban?.bannedCount ?? fail2ban?.totalBanned ?? null;
   const systemStatus = hostError || error || fail2banError ? "warning" : "online";
 
   return (

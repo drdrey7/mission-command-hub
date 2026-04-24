@@ -33,6 +33,7 @@ const {
   getFail2banStats,
   getFail2banJails,
   getFail2banBanned,
+  getFail2banHistory,
   toLegacyVpsPayload,
 } = require('./system-snapshot');
 
@@ -1265,6 +1266,7 @@ app.get('/api/fail2ban/stats', async (req, res) => {
       errors: [message],
       totalBanned: null,
       bannedCount: null,
+      currentBannedCount: null,
       jailsActive: null,
     });
   }
@@ -1300,7 +1302,71 @@ app.get('/api/fail2ban/banned', async (req, res) => {
       errors: [message],
       totalBanned: null,
       bannedCount: null,
+      currentBannedCount: null,
       bannedList: [],
+    });
+  }
+});
+
+app.get('/api/fail2ban/history', async (req, res) => {
+  try {
+    res.json(await getFail2banHistory());
+  } catch (error) {
+    const message = error?.message || String(error);
+    res.status(500).json({
+      ok: false,
+      collectedAt: new Date().toISOString(),
+      source: 'fail2ban.log',
+      retentionLimited: true,
+      warnings: [],
+      errors: [message],
+      files: [],
+      firstSeenAt: null,
+      lastSeenAt: null,
+      totalUniqueIps: 0,
+      history: [],
+    });
+  }
+});
+
+app.get('/api/fail2ban/logs', async (req, res) => {
+  try {
+    res.json(await getFail2banHistory());
+  } catch (error) {
+    const message = error?.message || String(error);
+    res.status(500).json({
+      ok: false,
+      collectedAt: new Date().toISOString(),
+      source: 'fail2ban.log',
+      retentionLimited: true,
+      warnings: [],
+      errors: [message],
+      files: [],
+      firstSeenAt: null,
+      lastSeenAt: null,
+      totalUniqueIps: 0,
+      history: [],
+    });
+  }
+});
+
+app.get('/api/fail2ban/seen', async (req, res) => {
+  try {
+    res.json(await getFail2banHistory());
+  } catch (error) {
+    const message = error?.message || String(error);
+    res.status(500).json({
+      ok: false,
+      collectedAt: new Date().toISOString(),
+      source: 'fail2ban.log',
+      retentionLimited: true,
+      warnings: [],
+      errors: [message],
+      files: [],
+      firstSeenAt: null,
+      lastSeenAt: null,
+      totalUniqueIps: 0,
+      history: [],
     });
   }
 });

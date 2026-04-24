@@ -9,6 +9,7 @@ const SNAPSHOT_TTL_MS = 5000;
 const cache = {
   vps: { promise: null, value: null, collectedAt: 0 },
   fail2ban: { promise: null, value: null, collectedAt: 0 },
+  fail2banHistory: { promise: null, value: null, collectedAt: 0 },
 };
 
 const ipv4Regex = /\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b/g;
@@ -272,6 +273,10 @@ function parseFail2banJailStatus(jail, output) {
     }
 
     if (/Banned IP list:/i.test(line)) {
+      const afterColon = line.split(':').slice(1).join(':').trim();
+      if (afterColon) {
+        result.bannedList.push(...extractIpv4List(afterColon));
+      }
       inBannedList = true;
       continue;
     }
@@ -286,6 +291,216 @@ function parseFail2banJailStatus(jail, output) {
 
   result.bannedList = [...new Set(result.bannedList)];
   return result;
+}
+
+function readFileIfExists(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function listFail2banLogFiles() {
+  const logDir = '/var/log';
+  const pattern = /^fail2ban\.log(\.\d+)?$/;
+  try {
+    return fs
+      .readdirSync(logDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && pattern.test(entry.name))
+      .map((entry) => `${logDir}/${entry.name}`)
+      .sort((a, b) => {
+        try {
+          return fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs;
+        } catch {
+          return a.localeCompare(b);
+        }
+      });
+  } catch {
+    return [];
+  }
+}
+
+function parseFail2banTimestamp(raw) {
+  if (!raw) return null;
+  const normalized = raw.replace(',', '.');
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toISOString();
+}
+
+function parseFail2banHistoryFromText(text, state) {
+  for (const rawLine of String(text || '').split('\n')) {
+    const actionMatch = rawLine.match(/.*\[(.+?)\]\s+(Ban|Unban)\s+(\d{1,3}(?:\.\d{1,3}){3})\b/i);
+    if (!actionMatch) continue;
+    const timestampMatch = rawLine.match(/^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[,.]\d{3,6})?)/);
+    const [, jailRaw, actionRaw, ip] = actionMatch;
+    const jail = String(jailRaw || '').trim();
+    const action = String(actionRaw || '').toLowerCase();
+    const at = parseFail2banTimestamp(timestampMatch?.[1] || null);
+    if (!ip) continue;
+
+    const entry = state.byIp.get(ip) || {
+      ip,
+      jails: new Set(),
+      firstSeenAt: null,
+      lastSeenAt: null,
+      banCount: 0,
+      unbanCount: 0,
+      currentlyBanned: false,
+      currentJails: new Set(),
+      lastJail: null,
+      lastAction: null,
+      lastEventAt: null,
+    };
+
+    entry.jails.add(jail);
+    entry.lastJail = jail;
+    entry.lastAction = action === 'ban' ? 'Ban' : 'Unban';
+    entry.lastEventAt = at;
+    if (!entry.firstSeenAt) entry.firstSeenAt = at;
+    entry.lastSeenAt = at;
+
+    if (action === 'ban') {
+      entry.banCount += 1;
+      entry.currentlyBanned = true;
+      entry.currentJails.add(jail);
+    } else if (action === 'unban') {
+      entry.unbanCount += 1;
+      entry.currentJails.delete(jail);
+      if (entry.currentJails.size === 0) {
+        entry.currentlyBanned = false;
+      }
+    }
+
+    state.byIp.set(ip, entry);
+    if (!state.firstSeenAt || (at && state.firstSeenAt && String(at) < String(state.firstSeenAt))) {
+      state.firstSeenAt = at;
+    }
+    if (!state.lastSeenAt || (at && state.lastSeenAt && String(at) > String(state.lastSeenAt))) {
+      state.lastSeenAt = at;
+    }
+  }
+}
+
+async function buildFail2banHistory() {
+  const collectedAt = new Date().toISOString();
+  const warnings = [];
+  const errors = [];
+  const files = listFail2banLogFiles();
+  const state = {
+    byIp: new Map(),
+    firstSeenAt: null,
+    lastSeenAt: null,
+  };
+
+  if (files.length === 0) {
+    warnings.push('No fail2ban.log files found on disk');
+    try {
+      const journalOutput = await execCommand('journalctl', ['-u', 'fail2ban', '--no-pager', '-o', 'short-iso'], { timeout: 8000, maxBuffer: 4 * 1024 * 1024 });
+      if (journalOutput) {
+        parseFail2banHistoryFromText(journalOutput, state);
+      }
+      if (state.byIp.size === 0) {
+        warnings.push('Fail2ban journal history unavailable or empty');
+      }
+      return {
+        ok: true,
+        collectedAt,
+        source: 'journalctl',
+        retentionLimited: true,
+        warnings,
+        errors,
+        files: [],
+        firstSeenAt: state.firstSeenAt,
+        lastSeenAt: state.lastSeenAt,
+        totalUniqueIps: state.byIp.size,
+        history: [...state.byIp.values()].map((entry) => ({
+          ip: entry.ip,
+          jails: [...entry.jails].sort(),
+          firstSeenAt: entry.firstSeenAt,
+          lastSeenAt: entry.lastSeenAt,
+          banCount: entry.banCount,
+          unbanCount: entry.unbanCount,
+          currentlyBanned: entry.currentlyBanned,
+          currentJails: [...entry.currentJails].sort(),
+          lastJail: entry.lastJail,
+          lastAction: entry.lastAction,
+          lastEventAt: entry.lastEventAt,
+        })).sort((a, b) => String(b.lastSeenAt || '').localeCompare(String(a.lastSeenAt || ''))),
+      };
+    } catch (error) {
+      errors.push(`Fail2ban history unavailable: ${toMessage(error)}`);
+      return {
+        ok: true,
+        collectedAt,
+        source: 'logs',
+        retentionLimited: true,
+        warnings,
+        errors,
+        files: [],
+        firstSeenAt: null,
+        lastSeenAt: null,
+        totalUniqueIps: 0,
+        history: [],
+      };
+    }
+  }
+
+  for (const filePath of files) {
+    const content = readFileIfExists(filePath);
+    if (content === null) {
+      warnings.push(`Unable to read ${filePath}`);
+      continue;
+    }
+    parseFail2banHistoryFromText(content, state);
+  }
+
+  const fileMeta = files.map((filePath) => {
+    try {
+      const stat = fs.statSync(filePath);
+      return {
+        path: filePath,
+        size: stat.size,
+        mtime: new Date(stat.mtimeMs).toISOString(),
+      };
+    } catch {
+      return {
+        path: filePath,
+        size: null,
+        mtime: null,
+      };
+    }
+  });
+
+  return {
+    ok: true,
+    collectedAt,
+    source: 'fail2ban.log',
+    retentionLimited: true,
+    warnings: files.length > 0 ? [...warnings, 'History is limited to locally retained fail2ban logs'] : warnings,
+    errors,
+    files: fileMeta,
+    firstSeenAt: state.firstSeenAt,
+    lastSeenAt: state.lastSeenAt,
+    totalUniqueIps: state.byIp.size,
+    history: [...state.byIp.values()]
+      .map((entry) => ({
+        ip: entry.ip,
+        jails: [...entry.jails].sort(),
+        firstSeenAt: entry.firstSeenAt,
+        lastSeenAt: entry.lastSeenAt,
+        banCount: entry.banCount,
+        unbanCount: entry.unbanCount,
+        currentlyBanned: entry.currentlyBanned,
+        currentJails: [...entry.currentJails].sort(),
+        lastJail: entry.lastJail,
+        lastAction: entry.lastAction,
+        lastEventAt: entry.lastEventAt,
+      }))
+      .sort((a, b) => String(b.lastSeenAt || '').localeCompare(String(a.lastSeenAt || ''))),
+  };
 }
 
 async function getFail2banSnapshot() {
@@ -357,8 +572,9 @@ async function getFail2banSnapshot() {
     }
   }
 
-  const totalBanned = jails.reduce((sum, jail) => sum + (Number.isFinite(jail.currentlyBanned) ? jail.currentlyBanned : 0), 0);
   const bannedList = [...bannedMap.values()];
+  const currentBannedCount = bannedList.length;
+  const totalBanned = currentBannedCount;
 
   return {
     ok: true,
@@ -367,7 +583,8 @@ async function getFail2banSnapshot() {
     warnings,
     errors,
     totalBanned: Number.isFinite(totalBanned) ? totalBanned : null,
-    bannedCount: bannedList.length,
+    bannedCount: currentBannedCount,
+    currentBannedCount,
     jailsActive: jails.length,
     jails,
     bannedList,
@@ -460,8 +677,13 @@ async function getFail2banBanned() {
     errors: snapshot.errors,
     totalBanned: snapshot.totalBanned,
     bannedCount: snapshot.bannedCount,
+    currentBannedCount: snapshot.currentBannedCount,
     bannedList: snapshot.bannedList,
   };
+}
+
+async function getFail2banHistory() {
+  return getCachedSnapshot('fail2banHistory', buildFail2banHistory);
 }
 
 module.exports = {
@@ -470,6 +692,7 @@ module.exports = {
   getFail2banStats,
   getFail2banJails,
   getFail2banBanned,
+  getFail2banHistory,
   toLegacyVpsPayload,
   // Exported for tests and future reuse.
   formatBinaryBytes,

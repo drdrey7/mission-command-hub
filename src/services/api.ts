@@ -16,6 +16,7 @@
  *   GET    /fail2ban/stats                                          → Fail2banStats
  *   GET    /fail2ban/jails                                          → Fail2banJailsResponse
  *   GET    /fail2ban/banned                                         → Fail2banBannedResponse
+ *   GET    /fail2ban/seen                                           → Fail2banHistoryResponse
  */
 
 import {
@@ -651,6 +652,7 @@ export interface Fail2banStats {
   errors: string[];
   totalBanned: number | null;
   bannedCount: number | null;
+  currentBannedCount?: number | null;
   jailsActive: number | null;
 }
 
@@ -672,7 +674,36 @@ export interface Fail2banBannedResponse {
   errors: string[];
   totalBanned: number | null;
   bannedCount: number | null;
+  currentBannedCount?: number | null;
   bannedList: BannedIp[];
+}
+
+export interface Fail2banHistoryEntry {
+  ip: string;
+  jails: string[];
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  banCount: number;
+  unbanCount: number;
+  currentlyBanned: boolean;
+  currentJails: string[];
+  lastJail: string | null;
+  lastAction: string | null;
+  lastEventAt: string | null;
+}
+
+export interface Fail2banHistoryResponse {
+  ok: boolean;
+  collectedAt: string;
+  source: string;
+  retentionLimited: boolean;
+  warnings: string[];
+  errors: string[];
+  files: Array<{ path: string; size: number | null; mtime: string | null }>;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  totalUniqueIps: number;
+  history: Fail2banHistoryEntry[];
 }
 
 const mockJails: Fail2banJail[] = [
@@ -717,12 +748,30 @@ export const getFail2banBanned = (): Promise<Fail2banBannedResponse> =>
         errors: [],
         totalBanned: mockBanned.length,
         bannedCount: mockBanned.length,
+        currentBannedCount: mockBanned.length,
         bannedList: mockBanned,
       })
     : http<Fail2banBannedResponse>("/api/fail2ban/banned");
 
 export const getFail2banStats = (): Promise<Fail2banStats> =>
   USE_MOCK ? delay(mockStats) : http<Fail2banStats>("/api/fail2ban/stats");
+
+export const getFail2banHistory = (): Promise<Fail2banHistoryResponse> =>
+  USE_MOCK
+    ? delay({
+        ok: true,
+        collectedAt: new Date().toISOString(),
+        source: "fail2ban.log",
+        retentionLimited: true,
+        warnings: [],
+        errors: [],
+        files: [],
+        firstSeenAt: null,
+        lastSeenAt: null,
+        totalUniqueIps: 0,
+        history: [],
+      })
+    : http<Fail2banHistoryResponse>("/api/fail2ban/seen");
 
 export const unbanIp = (ip: string, jail: string) =>
   USE_MOCK ? delay({ ok: true, ip, jail }, 400)
