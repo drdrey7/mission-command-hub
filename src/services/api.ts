@@ -637,6 +637,22 @@ export interface Notification {
   sessionId?: string | null;
   runId?: string | null;
 }
+
+export interface AttentionSignal {
+  id: string;
+  title: string;
+  body: string;
+  level: "warning" | "critical";
+  category: string;
+  time: string;
+  timestamp?: string | null;
+  source?: string | null;
+  kind?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  runId?: string | null;
+}
+
 export interface NotificationsFeedResponse {
   ok: boolean;
   collectedAt: string;
@@ -649,6 +665,16 @@ export interface NotificationsFeedResponse {
   sources?: Record<string, unknown> | null;
 }
 
+export interface AttentionSignalsResponse {
+  ok: boolean;
+  collectedAt: string;
+  source: string;
+  totalCount: number;
+  items: AttentionSignal[];
+  rules?: string[];
+  sources?: Record<string, unknown> | null;
+}
+
 export interface NotificationReadResponse {
   ok: boolean;
   readAt: string;
@@ -658,6 +684,9 @@ export interface NotificationReadResponse {
 
 export const getNotifications = (): Promise<NotificationsFeedResponse> =>
   http<NotificationsFeedResponse>("/api/notifications");
+
+export const getAttentionSignals = (): Promise<AttentionSignalsResponse> =>
+  http<AttentionSignalsResponse>("/api/attention-signals");
 
 export const markNotificationsRead = (ids: string[] = []) =>
   http<NotificationReadResponse>("/api/notifications/read", {

@@ -4,6 +4,7 @@ const { buildOpenClawState, relativeLabel } = require('./openclaw-state');
 
 const STORE_PATH = '/root/.openclaw/projects/mission-control/data/notifications-state.json';
 const DEFAULT_LIMIT = 50;
+const ATTENTION_LIMIT = 5;
 
 function isoNow() {
   return new Date().toISOString();
@@ -72,6 +73,142 @@ function classifyLevel(type, severity, text) {
   if (severity === 'critical') return 'critical';
   if (severity === 'warning') return 'warning';
   return 'info';
+}
+
+function classifyOperationalTitle(message) {
+  const normalized = String(message || '').toLowerCase();
+  if (normalized.includes('gateway') || normalized.includes('sessions_list')) return 'Gateway sem resposta';
+  if (normalized.includes('dispatch')) return 'Dispatch falhou';
+  if (normalized.includes('session') || normalized.includes('sess')) return 'Sessão com erro';
+  if (normalized.includes('agent') || normalized.includes('agente')) return 'Agente com erro';
+  return 'Erro operacional';
+}
+
+function signalId(prefix, value, index = 0) {
+  const safe = String(value || `${prefix}:${index}`)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9:_-]+/g, '-')
+    .slice(0, 180);
+  return `attention:${prefix}:${safe || index}`;
+}
+
+function isActionableNotification(notification) {
+  const kind = String(notification?.kind || '').toLowerCase();
+  const title = String(notification?.title || '');
+  const body = String(notification?.body || '');
+  const text = `${title} ${body}`.toLowerCase();
+  if (notification?.level === 'critical') return true;
+  if (['dispatch_failed', 'error', 'failed'].includes(kind)) return true;
+  if (/(dispatch falh|falha|failed|error|erro|critical|gateway sem resposta|sem resposta)/i.test(text)) return true;
+  return false;
+}
+
+function buildSignalFromNotification(notification) {
+  const kind = String(notification?.kind || '').toLowerCase();
+  const title = kind === 'dispatch_failed'
+    ? 'Dispatch falhou'
+    : classifyOperationalTitle(`${notification?.title || ''} ${notification?.body || ''}`);
+  return {
+    id: `attention:${notification.id}`,
+    title,
+    body: notification.body || notification.title || 'Evento operacional requer atenção.',
+    level: notification.level === 'critical' ? 'critical' : 'warning',
+    category: kind || 'activity',
+    time: notification.time,
+    timestamp: notification.timestamp || null,
+    source: notification.source || notification.agent || 'sistema',
+    kind: notification.kind || null,
+    sessionKey: notification.sessionKey || null,
+    sessionId: notification.sessionId || null,
+    runId: notification.runId || null,
+  };
+}
+
+function buildAttentionSignalsFromState(state, notifications, limit = ATTENTION_LIMIT) {
+  const signals = [];
+  const now = Date.now();
+
+  for (const [index, error] of (Array.isArray(state?.errors) ? state.errors : []).entries()) {
+    signals.push({
+      id: signalId('state-error', error, index),
+      title: classifyOperationalTitle(error),
+      body: excerpt(error, 180) || 'Erro real reportado pelo Mission Control.',
+      level: 'critical',
+      category: 'system',
+      time: relativeLabel(state?.generatedAt, now),
+      timestamp: state?.generatedAt || isoNow(),
+      source: 'sistema',
+      kind: 'state_error',
+      sessionKey: null,
+      sessionId: null,
+      runId: null,
+    });
+  }
+
+  for (const [index, warning] of (Array.isArray(state?.warnings) ? state.warnings : []).entries()) {
+    const text = String(warning || '');
+    if (!/(gateway|token|session|agent|config|unavailable|missing|erro|error|falha|fail)/i.test(text)) continue;
+    signals.push({
+      id: signalId('state-warning', warning, index),
+      title: /token/i.test(text) ? 'Gateway sem token' : classifyOperationalTitle(text),
+      body: excerpt(text, 180) || 'Aviso operacional real reportado pelo Mission Control.',
+      level: 'warning',
+      category: 'system',
+      time: relativeLabel(state?.generatedAt, now),
+      timestamp: state?.generatedAt || isoNow(),
+      source: 'sistema',
+      kind: 'state_warning',
+      sessionKey: null,
+      sessionId: null,
+      runId: null,
+    });
+  }
+
+  for (const notification of notifications || []) {
+    if (!isActionableNotification(notification)) continue;
+    signals.push(buildSignalFromNotification(notification));
+  }
+
+  for (const session of Array.isArray(state?.sessions) ? state.sessions : []) {
+    const status = String(session?.status || session?.executionState || '').toLowerCase();
+    const hasSessionRef = Boolean(session?.sessionId || session?.sessionKey);
+    const linkedTaskIds = Array.isArray(session?.linkedTaskIds) ? session.linkedTaskIds.filter(Boolean) : [];
+    const finished = ['completed', 'done', 'complete'].includes(status) || session?.executionState === 'completed';
+    if (!hasSessionRef || !finished || session?.finalResult || linkedTaskIds.length === 0) continue;
+    const timestamp = session.updatedAt || session.endedAt || session.startedAt || state?.generatedAt || isoNow();
+    signals.push({
+      id: signalId('session-no-result', `${session.sessionId || session.sessionKey}:${linkedTaskIds.join(',')}`),
+      title: 'Sessão sem conclusão',
+      body: `Sessão ligada a task sem resposta final capturada (${linkedTaskIds.slice(0, 2).join(', ')}).`,
+      level: 'warning',
+      category: 'session',
+      time: relativeLabel(timestamp, now),
+      timestamp,
+      source: session.agentId || 'sistema',
+      kind: 'session_missing_final_result',
+      sessionKey: session.sessionKey || null,
+      sessionId: session.sessionId || null,
+      runId: null,
+    });
+  }
+
+  const seen = new Set();
+  const deduped = [];
+  for (const signal of signals) {
+    if (seen.has(signal.id)) continue;
+    seen.add(signal.id);
+    deduped.push(signal);
+  }
+
+  deduped.sort((a, b) => {
+    const severity = { critical: 2, warning: 1, info: 0 };
+    const severityDiff = (severity[b.level] || 0) - (severity[a.level] || 0);
+    if (severityDiff) return severityDiff;
+    return String(b.timestamp || '').localeCompare(String(a.timestamp || ''));
+  });
+
+  return deduped.slice(0, limit);
 }
 
 function isRelevantActivity(entry) {
@@ -203,6 +340,36 @@ async function getNotificationsFeed({ fetchImpl, token, limit = DEFAULT_LIMIT } 
   };
 }
 
+async function getAttentionSignals({ fetchImpl, token, limit = ATTENTION_LIMIT } = {}) {
+  const feed = await getNotificationsFeed({
+    fetchImpl,
+    token,
+    limit: Math.max(DEFAULT_LIMIT, Number(limit) * 10),
+  });
+  const state = await buildOpenClawState({
+    fetchImpl,
+    token,
+    activityLimit: 100,
+    sessionLimit: 100,
+  });
+  const signals = buildAttentionSignalsFromState(state, feed.items || [], Number(limit) || ATTENTION_LIMIT);
+
+  return {
+    ok: true,
+    collectedAt: state.generatedAt || feed.collectedAt || isoNow(),
+    source: 'openclaw-attention',
+    totalCount: signals.length,
+    items: signals,
+    rules: [
+      'state errors are critical',
+      'operational warnings about gateway/token/session/agent/config are warning',
+      'critical notifications and dispatch/error activity are actionable',
+      'completed task-linked sessions without final result are warning',
+    ],
+    sources: state.sources || feed.sources || null,
+  };
+}
+
 async function markNotificationsRead({ ids = [], all = false, fetchImpl, token, limit = DEFAULT_LIMIT } = {}) {
   const normalizedIds = [...new Set(
     (Array.isArray(ids) ? ids : [])
@@ -240,4 +407,6 @@ module.exports = {
   isRelevantActivity,
   buildNotification,
   classifyLevel,
+  getAttentionSignals,
+  buildAttentionSignalsFromState,
 };
