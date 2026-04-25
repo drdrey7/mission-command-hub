@@ -6,17 +6,17 @@ import {
   FileText,
   Home,
   LayoutGrid,
-  MessageSquare,
+  MessageCircle,
   Plane,
+  RadioTower,
   Server,
   Shield,
 } from "lucide-react";
 import { TopBar } from "@/components/mission/TopBar";
-import { AgentCard } from "@/components/mission/AgentCard";
-import { ActiveTasksPanel } from "@/components/mission/ActiveTasksPanel";
-import { SystemStatusPanel } from "@/components/mission/SystemStatusPanel";
 import { CommandFooter } from "@/components/mission/CommandFooter";
 import { AgentChat } from "@/components/mission/AgentChat";
+import { AgentBadge } from "@/components/mission/AgentBadge";
+import { StatusBadge } from "@/components/mission/StatusBadge";
 import { TasksTab } from "@/components/mission/TasksTab";
 import { MemoryTab } from "@/components/mission/MemoryTab";
 import { VpsPanel } from "@/components/mission/VpsPanel";
@@ -36,7 +36,7 @@ const PRIMARY_NAV: Array<{ key: PrimaryArea; label: string; icon: typeof Home }>
   { key: "tasks", label: "Tasks", icon: ClipboardList },
   { key: "hub", label: "Hub", icon: LayoutGrid },
   { key: "memory", label: "Memory", icon: Brain },
-  { key: "chat", label: "Chat", icon: MessageSquare },
+  { key: "chat", label: "Chat", icon: MessageCircle },
 ];
 
 const HUB_MODULES: Array<{ key: ModuleArea; label: string; eyebrow: string; description: string; icon: typeof Server }> = [
@@ -54,7 +54,7 @@ const moduleTitles: Record<ModuleArea, { title: string; subtitle: string }> = {
 const isModuleArea = (area: Area): area is ModuleArea => ["vps", "fail2ban", "audit"].includes(area);
 
 const ShellTitle = ({ area }: { area: Area }) => {
-  if (area === "home") return { title: "Home", subtitle: "Cockpit curto: agentes, alertas e sinais importantes." };
+  if (area === "home") return { title: "Flight Deck", subtitle: "Um varrimento rapido: tripulacao, sinais criticos e nada mais." };
   if (area === "tasks") return { title: "Tasks", subtitle: "Board real, detalhe e dispatch." };
   if (area === "hub") return { title: "Hub", subtitle: "Launcher de modulos reais ja ligados." };
   if (area === "memory") return { title: "Memory", subtitle: "Resumos locais reais por dia e agente." };
@@ -91,15 +91,15 @@ const AttentionPanel = () => {
   }, []);
 
   return (
-    <section className="panel p-5">
+    <section className="panel overflow-hidden p-4 sm:p-5">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-surface-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-status-warning/30 bg-status-warning/10">
             <Bell className="h-4 w-4 text-status-warning" />
           </div>
           <div>
-            <h2 className="font-display text-xs font-semibold uppercase tracking-[0.18em] text-foreground">Atencao</h2>
-            <p className="text-[11px] text-muted-foreground">{loading ? "a carregar..." : `${notifications.length} sinais importantes`}</p>
+            <h2 className="font-display text-xs font-semibold uppercase tracking-[0.2em] text-foreground">Sinais</h2>
+            <p className="text-[11px] text-muted-foreground">{loading ? "radar a varrer..." : `${notifications.length} requerem atencao`}</p>
           </div>
         </div>
       </div>
@@ -130,8 +130,9 @@ const AttentionPanel = () => {
           ))}
         </div>
       ) : (
-        <div className="mt-4 rounded-xl border border-border/60 bg-surface-2/30 px-3 py-3 text-sm text-muted-foreground">
-          Sem alertas criticos por ler.
+        <div className="mt-4 rounded-2xl border border-status-online/25 bg-status-online/5 px-4 py-4">
+          <p className="text-sm font-medium text-foreground">Cockpit limpo.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Sem alertas criticos por ler neste momento.</p>
         </div>
       )}
     </section>
@@ -146,15 +147,20 @@ const AgentsSummary = ({ agents, configuredCount, onlineCount, workingCount, err
   error: string | null;
 }) => {
   const compactAgents = agents.slice(0, 4);
+  const offlineCount = Math.max(0, configuredCount - onlineCount);
 
   return (
-    <section className="panel p-5">
-      <div className="mb-4 flex items-end justify-between gap-3">
+    <section className="panel relative overflow-hidden p-4 sm:p-5">
+      <div className="pointer-events-none absolute -right-16 -top-20 h-40 w-40 rounded-full bg-agent-comandante/10 blur-3xl" />
+      <div className="relative mb-4 flex items-start justify-between gap-3">
         <div>
-          <h2 className="font-display text-xs font-semibold uppercase tracking-[0.18em] text-foreground">Agentes</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {String(onlineCount).padStart(2, "0")} / {String(configuredCount).padStart(2, "0")} online · {String(workingCount).padStart(2, "0")} working
-          </p>
+          <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.24em] text-muted-foreground">
+            <RadioTower className="h-3.5 w-3.5 text-agent-comandante" />
+            Crew status
+          </div>
+          <h2 className="mt-2 font-display text-xl font-semibold tracking-tight text-foreground">
+            {workingCount > 0 ? `${workingCount} em operacao` : "Tripulacao em espera"}
+          </h2>
         </div>
         <span className="rounded-full border border-status-online/40 bg-status-online/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-status-online">
           live
@@ -165,13 +171,37 @@ const AgentsSummary = ({ agents, configuredCount, onlineCount, workingCount, err
           {error}
         </div>
       )}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="relative grid grid-cols-3 gap-2">
+        {[
+          { label: "Online", value: onlineCount, tone: "text-status-online" },
+          { label: "Working", value: workingCount, tone: workingCount > 0 ? "text-status-warning" : "text-muted-foreground" },
+          { label: "Offline", value: offlineCount, tone: offlineCount > 0 ? "text-muted-foreground" : "text-status-online" },
+        ].map((item) => (
+          <div key={item.label} className="rounded-2xl border border-border/60 bg-surface-2/40 px-3 py-2">
+            <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-muted-foreground">{item.label}</p>
+            <p className={cn("mt-1 font-mono text-xl font-bold tabular-nums", item.tone)}>{String(item.value).padStart(2, "0")}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="relative mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {compactAgents.length === 0 ? (
-          <p className="col-span-full rounded-xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
+          <p className="col-span-full rounded-xl border border-dashed border-border/60 p-5 text-center text-sm text-muted-foreground">
             Sem agentes disponiveis
           </p>
         ) : (
-          compactAgents.map((agent) => <AgentCard key={agent.key} agent={agent} />)
+          compactAgents.map((agent) => (
+            <article key={agent.key} className="flex min-w-0 items-center justify-between gap-3 rounded-2xl border border-border/60 bg-background/55 px-3 py-2.5">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <AgentBadge agent={agent.key} working={agent.status === "em_voo"} size="sm" />
+                <div className="min-w-0">
+                  <p className="truncate font-display text-sm font-semibold lowercase text-foreground">{agent.name}</p>
+                  <p className="truncate font-mono text-[10px] text-muted-foreground">{agent.lastActivity || "-"}</p>
+                </div>
+              </div>
+              <StatusBadge status={agent.status} />
+            </article>
+          ))
         )}
       </div>
     </section>
@@ -276,13 +306,9 @@ const Index = () => {
   const content = useMemo(() => {
     if (area === "home") {
       return (
-        <div className="space-y-4">
+        <div className="mx-auto max-w-4xl space-y-4">
           <AgentsSummary agents={agents} configuredCount={configuredCount} onlineCount={onlineCount} workingCount={workingCount} error={agentError} />
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <AttentionPanel />
-            <ActiveTasksPanel onSeeAll={() => goArea("tasks")} />
-          </div>
-          <SystemStatusPanel onSeeFail2ban={() => goArea("fail2ban")} onSeeVps={() => goArea("vps")} />
+          <AttentionPanel />
         </div>
       );
     }
@@ -410,8 +436,8 @@ const Index = () => {
                 <span
                   className={cn(
                     "flex items-center justify-center rounded-2xl border transition-smooth",
-                    isHub ? "h-14 w-14 border-primary/60 bg-primary text-primary-foreground shadow-glow-gold" : "h-9 w-9",
-                    !isHub && active ? "border-primary/40 bg-primary/10" : !isHub && "border-transparent bg-transparent",
+                    isHub ? "h-14 w-14 border-primary/60 bg-primary text-primary-foreground shadow-glow-gold" : "h-9 w-9 border-border/0 bg-transparent",
+                    !isHub && active ? "border-primary/40 bg-primary/10 text-primary" : !isHub && "text-muted-foreground",
                   )}
                 >
                   <Icon className={cn(isHub ? "h-6 w-6" : "h-4 w-4")} />
