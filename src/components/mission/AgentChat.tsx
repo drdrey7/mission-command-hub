@@ -47,9 +47,10 @@ interface AgentChatProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   embedded?: boolean;
+  showTrigger?: boolean;
 }
 
-export const AgentChat = ({ externalAgent, open: openProp, onOpenChange, embedded = false }: AgentChatProps = {}) => {
+export const AgentChat = ({ externalAgent, open: openProp, onOpenChange, embedded = false, showTrigger = true }: AgentChatProps = {}) => {
   const [openState, setOpenState] = useState(false);
   const open = embedded ? true : openProp ?? openState;
   const setOpen = (v: boolean) => {
@@ -491,15 +492,17 @@ export const AgentChat = ({ externalAgent, open: openProp, onOpenChange, embedde
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      <SheetTrigger asChild>
-        <Button
-          size="lg"
-          className="fixed bottom-6 right-6 z-40 h-14 w-14 rounded-full p-0 shadow-glow-gold"
-          aria-label="Abrir chat com agentes"
-        >
-          <MessageSquare className="h-6 w-6" />
-        </Button>
-      </SheetTrigger>
+      {showTrigger && (
+        <SheetTrigger asChild>
+          <Button
+            size="lg"
+            className="fixed bottom-6 right-6 z-40 h-14 w-14 rounded-full p-0 shadow-glow-gold"
+            aria-label="Abrir chat com agentes"
+          >
+            <MessageSquare className="h-6 w-6" />
+          </Button>
+        </SheetTrigger>
+      )}
       <SheetContent
         side="right"
         className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden p-0 sm:max-w-md"

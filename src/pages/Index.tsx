@@ -209,29 +209,55 @@ const AgentsSummary = ({ agents, configuredCount, onlineCount, workingCount, err
 };
 
 const HubLauncher = ({ onOpenModule }: { onOpenModule: (module: ModuleArea) => void }) => (
-  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-    {HUB_MODULES.map((module) => {
-      const Icon = module.icon;
-      return (
-        <button
-          key={module.key}
-          type="button"
-          onClick={() => onOpenModule(module.key)}
-          className="group overflow-hidden rounded-2xl border border-border/60 bg-surface-1/70 p-5 text-left shadow-panel transition-smooth hover:-translate-y-0.5 hover:border-primary/60 hover:bg-surface-2/70"
-        >
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-muted-foreground">{module.eyebrow}</p>
-              <h3 className="mt-2 font-display text-lg font-semibold text-foreground">{module.label}</h3>
+  <div className="space-y-4">
+    <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3 xl:grid-cols-4">
+      {HUB_MODULES.map((module) => {
+        const Icon = module.icon;
+        return (
+          <button
+            key={module.key}
+            type="button"
+            onClick={() => onOpenModule(module.key)}
+            className="group relative min-h-[112px] overflow-hidden rounded-2xl border border-border/60 bg-surface-1/72 p-3 text-left shadow-panel transition-smooth hover:-translate-y-0.5 hover:border-primary/55 hover:bg-surface-2/75 sm:min-h-[128px] sm:p-4"
+          >
+            <div className="pointer-events-none absolute -right-8 -top-10 h-20 w-20 rounded-full bg-primary/8 blur-2xl transition-smooth group-hover:bg-primary/14" />
+            <div className="relative flex items-start justify-between gap-2">
+              <span className="rounded-full border border-border/55 bg-background/45 px-2 py-0.5 text-[8px] font-bold uppercase tracking-[0.18em] text-muted-foreground sm:text-[9px]">
+                {module.eyebrow}
+              </span>
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-primary/25 bg-primary/8 text-primary transition-smooth group-hover:border-primary/45 group-hover:bg-primary/12">
+                <Icon className="h-4 w-4" />
+              </div>
             </div>
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-primary/30 bg-primary/10 text-primary shadow-glow-gold transition-smooth group-hover:scale-105">
-              <Icon className="h-5 w-5" />
+            <div className="relative mt-4">
+              <h3 className="font-display text-base font-semibold tracking-tight text-foreground sm:text-lg">{module.label}</h3>
+              <p className="mt-1 hidden text-xs leading-5 text-muted-foreground sm:line-clamp-2 sm:block">
+                {module.description}
+              </p>
             </div>
-          </div>
-          <p className="mt-4 text-sm leading-6 text-muted-foreground">{module.description}</p>
-        </button>
-      );
-    })}
+          </button>
+        );
+      })}
+    </div>
+
+    <div className="flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-surface-2/42 px-3 py-2.5 sm:px-4">
+      <div className="min-w-0">
+        <p className="font-display text-[10px] font-bold uppercase tracking-[0.22em] text-muted-foreground">Hangar Control</p>
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">
+          {HUB_MODULES.length} modulos reais ligados
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {HUB_MODULES.map((module) => {
+          const Icon = module.icon;
+          return (
+            <span key={module.key} className="flex h-7 w-7 items-center justify-center rounded-lg border border-border/60 bg-background/50 text-muted-foreground">
+              <Icon className="h-3.5 w-3.5" />
+            </span>
+          );
+        })}
+      </div>
+    </div>
   </div>
 );
 
@@ -417,7 +443,7 @@ const Index = () => {
         style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.55rem)" }}
         aria-label="Navegacao principal"
       >
-        <div className="mx-auto grid max-w-md grid-cols-5 items-end gap-1">
+        <div className="mx-auto grid max-w-md grid-cols-5 items-end gap-1.5">
           {PRIMARY_NAV.map((item) => {
             const Icon = item.icon;
             const active = activePrimary === item.key;
@@ -428,7 +454,7 @@ const Index = () => {
                 type="button"
                 onClick={() => goArea(item.key)}
                 className={cn(
-                  "relative flex flex-col items-center justify-center gap-1 rounded-2xl px-2 py-2 text-[10px] font-semibold transition-smooth",
+                  "relative flex min-w-0 flex-col items-center justify-center gap-1 rounded-2xl px-1.5 py-2 text-[10px] font-semibold transition-smooth",
                   active ? "text-foreground" : "text-muted-foreground",
                   isHub && "-mt-5",
                 )}
@@ -442,14 +468,14 @@ const Index = () => {
                 >
                   <Icon className={cn(isHub ? "h-6 w-6" : "h-4 w-4")} />
                 </span>
-                <span className={cn(isHub && "text-primary")}>{item.label}</span>
+                <span className={cn("leading-none", isHub && "text-primary")}>{item.label}</span>
               </button>
             );
           })}
         </div>
       </nav>
 
-      {area !== "chat" && <AgentChat externalAgent={chatAgent} open={chatOpen} onOpenChange={setChatOpen} />}
+      {area !== "chat" && <AgentChat externalAgent={chatAgent} open={chatOpen} onOpenChange={setChatOpen} showTrigger={false} />}
     </main>
   );
 };
