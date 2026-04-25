@@ -75,15 +75,6 @@ function classifyLevel(type, severity, text) {
   return 'info';
 }
 
-function classifyOperationalTitle(message) {
-  const normalized = String(message || '').toLowerCase();
-  if (normalized.includes('gateway') || normalized.includes('sessions_list')) return 'Gateway sem resposta';
-  if (normalized.includes('dispatch')) return 'Dispatch falhou';
-  if (normalized.includes('session') || normalized.includes('sess')) return 'Sessão com erro';
-  if (normalized.includes('agent') || normalized.includes('agente')) return 'Agente com erro';
-  return 'Erro operacional';
-}
-
 function signalId(prefix, value, index = 0) {
   const safe = String(value || `${prefix}:${index}`)
     .trim()
@@ -93,104 +84,87 @@ function signalId(prefix, value, index = 0) {
   return `attention:${prefix}:${safe || index}`;
 }
 
-function isActionableNotification(notification) {
-  const kind = String(notification?.kind || '').toLowerCase();
-  const title = String(notification?.title || '');
-  const body = String(notification?.body || '');
-  const text = `${title} ${body}`.toLowerCase();
-  if (notification?.level === 'critical') return true;
-  if (['dispatch_failed', 'error', 'failed'].includes(kind)) return true;
-  if (/(dispatch falh|falha|failed|error|erro|critical|gateway sem resposta|sem resposta)/i.test(text)) return true;
-  return false;
+function isHumanActionRequest(text) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalized) return false;
+  if (/(dispatch failed|dispatch falh|gateway|sessions_list|session missing|sessão sem conclusão|sem conclusão|produced no reply|fallbacksummaryerror|erro técnico|technical error)/i.test(normalized)) {
+    return false;
+  }
+  return [
+    /\bdo you want\b/i,
+    /\bwaiting on your decision\b/i,
+    /\bceo review needed\b/i,
+    /\bplease choose\b/i,
+    /\bchoose between\b/i,
+    /\bapprove\b/i,
+    /\bconfirm\b/i,
+    /\bqueres\b/i,
+    /\bquer que\b/i,
+    /\bconfirmas\b/i,
+    /\bconfirma\b/i,
+    /\baprova\b/i,
+    /\baprovar\b/i,
+    /\bescolhe\b/i,
+    /\bescolher\b/i,
+    /\bdecide\b/i,
+    /\bdecidir\b/i,
+    /\bindica\b/i,
+    /\bindicar\b/i,
+    /\bfornece\b/i,
+    /\bfornecer\b/i,
+    /\benvia\b/i,
+    /\benviar\b/i,
+    /\bresponde\b/i,
+    /\bsim ou não\b/i,
+    /\bopção\s+[ab]\b/i,
+    /\bopcao\s+[ab]\b/i,
+    /\b(indica|indicar|fornece|fornecer|envia|enviar).{0,80}\b(api|api key|ficheiro|arquivo|direção|direcao)\b/i,
+    /\b(api|api key|ficheiro|arquivo|direção|direcao).{0,80}\b(indica|indicar|fornece|fornecer|envia|enviar)\b/i,
+    /\bdesbloque/i,
+    /\bpreciso que\b/i,
+    /\bpreciso de ti\b/i,
+    /\bpreciso do teu\b/i,
+    /\bà espera de ti\b/i,
+    /\ba espera de ti\b/i,
+  ].some((pattern) => pattern.test(normalized));
 }
 
-function buildSignalFromNotification(notification) {
-  const kind = String(notification?.kind || '').toLowerCase();
-  const title = kind === 'dispatch_failed'
-    ? 'Dispatch falhou'
-    : classifyOperationalTitle(`${notification?.title || ''} ${notification?.body || ''}`);
+function humanActionTitle(text) {
+  const normalized = String(text || '').toLowerCase();
+  if (/(aprova|aprovar|approve)/i.test(normalized)) return 'Aprovação pendente';
+  if (/(escolhe|escolher|choose|opção|opcao|option|decide|decidir)/i.test(normalized)) return 'Decisão pendente';
+  if (/(sim ou não|yes or no|responde|confirmas|confirma|confirm)/i.test(normalized)) return 'Resposta pendente';
+  if (/(api key|ficheiro|arquivo|direção|direcao|indica|fornece|envia)/i.test(normalized)) return 'Input necessário';
+  if (/(desbloque|à espera de ti|a espera de ti|waiting on your decision)/i.test(normalized)) return 'Bloqueio à tua espera';
+  return 'Ação tua pendente';
+}
+
+function buildHumanActionSignal(entry, index = 0) {
+  const text = entry?.text || entry?.note || '';
+  const timestamp = entry?.timestamp || isoNow();
   return {
-    id: `attention:${notification.id}`,
-    title,
-    body: notification.body || notification.title || 'Evento operacional requer atenção.',
-    level: notification.level === 'critical' ? 'critical' : 'warning',
-    category: kind || 'activity',
-    time: notification.time,
-    timestamp: notification.timestamp || null,
-    source: notification.source || notification.agent || 'sistema',
-    kind: notification.kind || null,
-    sessionKey: notification.sessionKey || null,
-    sessionId: notification.sessionId || null,
-    runId: notification.runId || null,
+    id: signalId('human-action', entry?.id || `${timestamp}:${entry?.source || 'system'}`, index),
+    title: humanActionTitle(text),
+    body: excerpt(text, 190) || 'Um agente precisa de uma decisão ou input teu.',
+    level: 'warning',
+    category: 'human_action',
+    time: relativeLabel(timestamp, Date.now()),
+    timestamp,
+    source: entry?.source || 'sistema',
+    kind: entry?.type || 'activity',
+    sessionKey: entry?.sessionKey || null,
+    sessionId: entry?.sessionId || null,
+    runId: entry?.runId || null,
   };
 }
 
-function buildAttentionSignalsFromState(state, notifications, limit = ATTENTION_LIMIT) {
+function buildAttentionSignalsFromState(state, limit = ATTENTION_LIMIT) {
   const signals = [];
-  const now = Date.now();
-
-  for (const [index, error] of (Array.isArray(state?.errors) ? state.errors : []).entries()) {
-    signals.push({
-      id: signalId('state-error', error, index),
-      title: classifyOperationalTitle(error),
-      body: excerpt(error, 180) || 'Erro real reportado pelo Mission Control.',
-      level: 'critical',
-      category: 'system',
-      time: relativeLabel(state?.generatedAt, now),
-      timestamp: state?.generatedAt || isoNow(),
-      source: 'sistema',
-      kind: 'state_error',
-      sessionKey: null,
-      sessionId: null,
-      runId: null,
-    });
-  }
-
-  for (const [index, warning] of (Array.isArray(state?.warnings) ? state.warnings : []).entries()) {
-    const text = String(warning || '');
-    if (!/(gateway|token|session|agent|config|unavailable|missing|erro|error|falha|fail)/i.test(text)) continue;
-    signals.push({
-      id: signalId('state-warning', warning, index),
-      title: /token/i.test(text) ? 'Gateway sem token' : classifyOperationalTitle(text),
-      body: excerpt(text, 180) || 'Aviso operacional real reportado pelo Mission Control.',
-      level: 'warning',
-      category: 'system',
-      time: relativeLabel(state?.generatedAt, now),
-      timestamp: state?.generatedAt || isoNow(),
-      source: 'sistema',
-      kind: 'state_warning',
-      sessionKey: null,
-      sessionId: null,
-      runId: null,
-    });
-  }
-
-  for (const notification of notifications || []) {
-    if (!isActionableNotification(notification)) continue;
-    signals.push(buildSignalFromNotification(notification));
-  }
-
-  for (const session of Array.isArray(state?.sessions) ? state.sessions : []) {
-    const status = String(session?.status || session?.executionState || '').toLowerCase();
-    const hasSessionRef = Boolean(session?.sessionId || session?.sessionKey);
-    const linkedTaskIds = Array.isArray(session?.linkedTaskIds) ? session.linkedTaskIds.filter(Boolean) : [];
-    const finished = ['completed', 'done', 'complete'].includes(status) || session?.executionState === 'completed';
-    if (!hasSessionRef || !finished || session?.finalResult || linkedTaskIds.length === 0) continue;
-    const timestamp = session.updatedAt || session.endedAt || session.startedAt || state?.generatedAt || isoNow();
-    signals.push({
-      id: signalId('session-no-result', `${session.sessionId || session.sessionKey}:${linkedTaskIds.join(',')}`),
-      title: 'Sessão sem conclusão',
-      body: `Sessão ligada a task sem resposta final capturada (${linkedTaskIds.slice(0, 2).join(', ')}).`,
-      level: 'warning',
-      category: 'session',
-      time: relativeLabel(timestamp, now),
-      timestamp,
-      source: session.agentId || 'sistema',
-      kind: 'session_missing_final_result',
-      sessionKey: session.sessionKey || null,
-      sessionId: session.sessionId || null,
-      runId: null,
-    });
+  for (const [index, entry] of (Array.isArray(state?.activity) ? state.activity : []).entries()) {
+    const type = String(entry?.type || '').toLowerCase();
+    if (!['assistant_message', 'log', 'warning'].includes(type)) continue;
+    if (!isHumanActionRequest(entry?.text || entry?.note || '')) continue;
+    signals.push(buildHumanActionSignal(entry, index));
   }
 
   const seen = new Set();
@@ -202,9 +176,6 @@ function buildAttentionSignalsFromState(state, notifications, limit = ATTENTION_
   }
 
   deduped.sort((a, b) => {
-    const severity = { critical: 2, warning: 1, info: 0 };
-    const severityDiff = (severity[b.level] || 0) - (severity[a.level] || 0);
-    if (severityDiff) return severityDiff;
     return String(b.timestamp || '').localeCompare(String(a.timestamp || ''));
   });
 
@@ -341,32 +312,26 @@ async function getNotificationsFeed({ fetchImpl, token, limit = DEFAULT_LIMIT } 
 }
 
 async function getAttentionSignals({ fetchImpl, token, limit = ATTENTION_LIMIT } = {}) {
-  const feed = await getNotificationsFeed({
-    fetchImpl,
-    token,
-    limit: Math.max(DEFAULT_LIMIT, Number(limit) * 10),
-  });
   const state = await buildOpenClawState({
     fetchImpl,
     token,
-    activityLimit: 100,
+    activityLimit: 150,
     sessionLimit: 100,
   });
-  const signals = buildAttentionSignalsFromState(state, feed.items || [], Number(limit) || ATTENTION_LIMIT);
+  const signals = buildAttentionSignalsFromState(state, Number(limit) || ATTENTION_LIMIT);
 
   return {
     ok: true,
-    collectedAt: state.generatedAt || feed.collectedAt || isoNow(),
+    collectedAt: state.generatedAt || isoNow(),
     source: 'openclaw-attention',
     totalCount: signals.length,
     items: signals,
     rules: [
-      'state errors are critical',
-      'operational warnings about gateway/token/session/agent/config are warning',
-      'critical notifications and dispatch/error activity are actionable',
-      'completed task-linked sessions without final result are warning',
+      'only real agent/activity messages that explicitly ask for human input are shown',
+      'technical errors, dispatch failures, gateway errors and missing session results are excluded',
+      'signals are derived from existing OpenClaw activity and are not tied to notification unread state',
     ],
-    sources: state.sources || feed.sources || null,
+    sources: state.sources || null,
   };
 }
 

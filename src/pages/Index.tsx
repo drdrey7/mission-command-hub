@@ -99,7 +99,7 @@ const AttentionPanel = () => {
           </div>
           <div>
             <h2 className="font-display text-xs font-semibold uppercase tracking-[0.2em] text-foreground">Sinais de atenção</h2>
-            <p className="text-[11px] text-muted-foreground">{loading ? "radar a varrer..." : `${signals.length} operacionais`}</p>
+            <p className="text-[11px] text-muted-foreground">{loading ? "radar a varrer..." : `${signals.length} precisam de ti`}</p>
           </div>
         </div>
       </div>
@@ -135,7 +135,7 @@ const AttentionPanel = () => {
       ) : (
         <div className="mt-4 rounded-2xl border border-status-online/25 bg-status-online/5 px-4 py-4">
           <p className="text-sm font-medium text-foreground">Cockpit limpo.</p>
-          <p className="mt-1 text-xs text-muted-foreground">Sem sinais operacionais a exigir atenção agora.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Nenhum agente está à espera de decisão tua agora.</p>
         </div>
       )}
     </section>
