@@ -4,6 +4,7 @@ const { buildOpenClawState, relativeLabel } = require('./openclaw-state');
 
 const STORE_PATH = '/root/.openclaw/projects/mission-control/data/notifications-state.json';
 const DEFAULT_LIMIT = 50;
+const ATTENTION_LIMIT = 5;
 
 function isoNow() {
   return new Date().toISOString();
@@ -72,6 +73,113 @@ function classifyLevel(type, severity, text) {
   if (severity === 'critical') return 'critical';
   if (severity === 'warning') return 'warning';
   return 'info';
+}
+
+function signalId(prefix, value, index = 0) {
+  const safe = String(value || `${prefix}:${index}`)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9:_-]+/g, '-')
+    .slice(0, 180);
+  return `attention:${prefix}:${safe || index}`;
+}
+
+function isHumanActionRequest(text) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalized) return false;
+  if (/(dispatch failed|dispatch falh|gateway|sessions_list|session missing|sessão sem conclusão|sem conclusão|produced no reply|fallbacksummaryerror|erro técnico|technical error)/i.test(normalized)) {
+    return false;
+  }
+  return [
+    /\bdo you want\b/i,
+    /\bwaiting on your decision\b/i,
+    /\bceo review needed\b/i,
+    /\bplease choose\b/i,
+    /\bchoose between\b/i,
+    /\bapprove\b/i,
+    /\bconfirm\b/i,
+    /\bqueres\b/i,
+    /\bquer que\b/i,
+    /\bconfirmas\b/i,
+    /\bconfirma\b/i,
+    /\baprova\b/i,
+    /\baprovar\b/i,
+    /\bescolhe\b/i,
+    /\bescolher\b/i,
+    /\bdecide\b/i,
+    /\bdecidir\b/i,
+    /\bindica\b/i,
+    /\bindicar\b/i,
+    /\bfornece\b/i,
+    /\bfornecer\b/i,
+    /\benvia\b/i,
+    /\benviar\b/i,
+    /\bresponde\b/i,
+    /\bsim ou não\b/i,
+    /\bopção\s+[ab]\b/i,
+    /\bopcao\s+[ab]\b/i,
+    /\b(indica|indicar|fornece|fornecer|envia|enviar).{0,80}\b(api|api key|ficheiro|arquivo|direção|direcao)\b/i,
+    /\b(api|api key|ficheiro|arquivo|direção|direcao).{0,80}\b(indica|indicar|fornece|fornecer|envia|enviar)\b/i,
+    /\bdesbloque/i,
+    /\bpreciso que\b/i,
+    /\bpreciso de ti\b/i,
+    /\bpreciso do teu\b/i,
+    /\bà espera de ti\b/i,
+    /\ba espera de ti\b/i,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function humanActionTitle(text) {
+  const normalized = String(text || '').toLowerCase();
+  if (/(aprova|aprovar|approve)/i.test(normalized)) return 'Aprovação pendente';
+  if (/(escolhe|escolher|choose|opção|opcao|option|decide|decidir)/i.test(normalized)) return 'Decisão pendente';
+  if (/(sim ou não|yes or no|responde|confirmas|confirma|confirm)/i.test(normalized)) return 'Resposta pendente';
+  if (/(api key|ficheiro|arquivo|direção|direcao|indica|fornece|envia)/i.test(normalized)) return 'Input necessário';
+  if (/(desbloque|à espera de ti|a espera de ti|waiting on your decision)/i.test(normalized)) return 'Bloqueio à tua espera';
+  return 'Ação tua pendente';
+}
+
+function buildHumanActionSignal(entry, index = 0) {
+  const text = entry?.text || entry?.note || '';
+  const timestamp = entry?.timestamp || isoNow();
+  return {
+    id: signalId('human-action', entry?.id || `${timestamp}:${entry?.source || 'system'}`, index),
+    title: humanActionTitle(text),
+    body: excerpt(text, 190) || 'Um agente precisa de uma decisão ou input teu.',
+    level: 'warning',
+    category: 'human_action',
+    time: relativeLabel(timestamp, Date.now()),
+    timestamp,
+    source: entry?.source || 'sistema',
+    kind: entry?.type || 'activity',
+    sessionKey: entry?.sessionKey || null,
+    sessionId: entry?.sessionId || null,
+    runId: entry?.runId || null,
+  };
+}
+
+function buildAttentionSignalsFromState(state, limit = ATTENTION_LIMIT) {
+  const signals = [];
+  for (const [index, entry] of (Array.isArray(state?.activity) ? state.activity : []).entries()) {
+    const type = String(entry?.type || '').toLowerCase();
+    if (!['assistant_message', 'log', 'warning'].includes(type)) continue;
+    if (!isHumanActionRequest(entry?.text || entry?.note || '')) continue;
+    signals.push(buildHumanActionSignal(entry, index));
+  }
+
+  const seen = new Set();
+  const deduped = [];
+  for (const signal of signals) {
+    if (seen.has(signal.id)) continue;
+    seen.add(signal.id);
+    deduped.push(signal);
+  }
+
+  deduped.sort((a, b) => {
+    return String(b.timestamp || '').localeCompare(String(a.timestamp || ''));
+  });
+
+  return deduped.slice(0, limit);
 }
 
 function isRelevantActivity(entry) {
@@ -203,6 +311,30 @@ async function getNotificationsFeed({ fetchImpl, token, limit = DEFAULT_LIMIT } 
   };
 }
 
+async function getAttentionSignals({ fetchImpl, token, limit = ATTENTION_LIMIT } = {}) {
+  const state = await buildOpenClawState({
+    fetchImpl,
+    token,
+    activityLimit: 150,
+    sessionLimit: 100,
+  });
+  const signals = buildAttentionSignalsFromState(state, Number(limit) || ATTENTION_LIMIT);
+
+  return {
+    ok: true,
+    collectedAt: state.generatedAt || isoNow(),
+    source: 'openclaw-attention',
+    totalCount: signals.length,
+    items: signals,
+    rules: [
+      'only real agent/activity messages that explicitly ask for human input are shown',
+      'technical errors, dispatch failures, gateway errors and missing session results are excluded',
+      'signals are derived from existing OpenClaw activity and are not tied to notification unread state',
+    ],
+    sources: state.sources || null,
+  };
+}
+
 async function markNotificationsRead({ ids = [], all = false, fetchImpl, token, limit = DEFAULT_LIMIT } = {}) {
   const normalizedIds = [...new Set(
     (Array.isArray(ids) ? ids : [])
@@ -240,4 +372,6 @@ module.exports = {
   isRelevantActivity,
   buildNotification,
   classifyLevel,
+  getAttentionSignals,
+  buildAttentionSignalsFromState,
 };

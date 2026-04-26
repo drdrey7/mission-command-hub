@@ -413,151 +413,325 @@ export const TasksTab = () => {
   const open = (board?.summary.standby ?? 0) + (board?.summary.inProgress ?? 0);
   const completed = board?.summary.completed ?? 0;
   const detailTask = detail?.task ?? null;
+  const detailFinalResponse = detail?.session?.finalResult || detail?.currentRun?.conclusion || detailTask?.conclusion || "";
+  const activeSections = TASK_SECTIONS.filter((section) => section.key !== "completed");
+  const completedItems = board?.sections.completed ?? [];
+
+  const renderTaskCard = (task: TaskItem, variant: "active" | "completed" = "active") => {
+    const taskKey = getTaskKey(task);
+    const taskAction = taskActions[taskKey] ?? null;
+    const isEditing = editingTaskKey === taskKey;
+    const draftText = editDrafts[taskKey] ?? task.text;
+    const statusInfo = getTaskStatusCopy(task);
+    const agentName = getTaskAgent(task);
+    const sessionRef = task.sessionId || task.sessionKey || null;
+    const isCompact = variant === "completed";
+
+    return (
+      <article
+        key={taskKey}
+        className={cn(
+          "rounded-xl border border-border/60 bg-background/75 shadow-sm transition-colors hover:border-primary/25",
+          isCompact ? "p-3" : "p-3.5",
+        )}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            {isEditing ? (
+              <Textarea
+                value={draftText}
+                onChange={(event) =>
+                  setEditDrafts((current) => ({
+                    ...current,
+                    [taskKey]: event.target.value,
+                  }))
+                }
+                rows={3}
+                className="min-h-[86px] resize-none"
+                disabled={taskAction === "edit"}
+              />
+            ) : (
+              <div className="space-y-2">
+                <p className={cn("font-medium leading-5 text-foreground", isCompact ? "line-clamp-2 text-sm" : "text-sm")}>
+                  {task.text}
+                </p>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+                      statusInfo.tone,
+                    )}
+                  >
+                    {statusInfo.label}
+                  </span>
+                  {agentName && (
+                    <span
+                      className={cn(
+                        "rounded-full border px-2 py-0.5 font-mono text-[10px] lowercase tracking-wide",
+                        ownerTone[String(agentName)] ?? "border-border text-muted-foreground",
+                      )}
+                    >
+                      {agentName}
+                    </span>
+                  )}
+                  {variant === "active" && (
+                    <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {sectionLabelByKey[task.section]}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex shrink-0 items-center gap-0.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+              onClick={() => void openTaskDetail(task)}
+              aria-label={`Abrir detalhe da tarefa ${task.text}`}
+            >
+              <ArrowUpRight className="h-4 w-4" />
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                  aria-label={`Mais ações para ${task.text}`}
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem onClick={() => startEditingTask(task)} disabled={Boolean(taskAction) || isEditing}>
+                  <Pencil className="mr-2 h-4 w-4" />
+                  Editar
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => void handleDelete(task)}
+                  disabled={Boolean(taskAction) || isEditing}
+                  className="text-status-offline focus:text-status-offline"
+                >
+                  {taskAction === "delete" ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-2 h-4 w-4" />
+                  )}
+                  Eliminar
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="px-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                  Mover para
+                </DropdownMenuLabel>
+                {TASK_SECTIONS.filter((option) => option.key !== task.section).map((option) => (
+                  <DropdownMenuItem
+                    key={option.key}
+                    onClick={() => handleMove(task, option.key)}
+                    disabled={Boolean(taskAction)}
+                  >
+                    {option.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+
+        {isEditing ? (
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-9"
+              onClick={() => cancelEditingTask(taskKey)}
+              disabled={taskAction === "edit"}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              className="h-9"
+              onClick={() => handleSaveEdit(task)}
+              disabled={!draftText.trim() || taskAction === "edit"}
+            >
+              {taskAction === "edit" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Guardar"}
+            </Button>
+          </div>
+        ) : (
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/40 pt-2 text-[10px] text-muted-foreground">
+            <span className="max-w-full truncate font-mono">ID {task.taskId || task.id}</span>
+            {sessionRef && <span className="max-w-full truncate font-mono">Sessão {sessionRef}</span>}
+          </div>
+        )}
+      </article>
+    );
+  };
 
   return (
     <div className="space-y-4">
-      <div className="rounded-2xl border border-border/60 bg-surface-1/60 p-4 sm:p-5">
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+      <div className="overflow-hidden rounded-2xl border border-border/60 bg-surface-1/70 shadow-sm">
+        <div className="border-b border-border/50 bg-background/35 px-4 py-3 sm:px-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-muted-foreground">
-                Tarefas reais
+                Task bay
               </p>
               <h3 className="mt-1 font-display text-lg font-semibold text-foreground">
                 Criar e dispatch
               </h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Ideia, prompt revisto e envio real para agente.
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {loading ? "a carregar…" : `${total} totais · ${open} em aberto · ${completed} concluídas`}
-            </p>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2">
-            {[
-              { label: "Total", value: total },
-              { label: "Em aberto", value: open },
-              { label: "Concluídas", value: completed },
-            ].map((item) => (
-              <div key={item.label} className="rounded-xl border border-border/60 bg-background/60 px-3 py-2">
-                <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{item.label}</p>
-                <p className="mt-1 font-mono text-lg font-bold tabular-nums text-foreground">
-                  {String(item.value).padStart(2, "0")}
-                </p>
-              </div>
-            ))}
+            <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-border/50 bg-background/50 p-1.5 sm:min-w-[260px]">
+              {[
+                { label: "Total", value: total },
+                { label: "Abertas", value: open },
+                { label: "Done", value: completed },
+              ].map((item) => (
+                <div key={item.label} className="rounded-lg px-2 py-1.5 text-center">
+                  <p className="font-mono text-base font-bold tabular-nums text-foreground">
+                    {loading ? "--" : String(item.value).padStart(2, "0")}
+                  </p>
+                  <p className="text-[9px] uppercase tracking-[0.16em] text-muted-foreground">{item.label}</p>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
-        <form onSubmit={handleDispatch} className="mt-4 space-y-3">
-          <div className="space-y-2">
-            <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-              Ideia
-            </label>
-            <Textarea
-              value={idea}
-              onChange={(event) => setIdea(event.target.value)}
-              placeholder="Escreve a ideia da tarefa em linguagem natural..."
-              rows={4}
-              className="min-h-[110px] resize-none"
-              disabled={dispatching || generating}
-            />
-          </div>
+        <form onSubmit={handleDispatch} className="space-y-3 px-4 py-4 sm:px-5">
+          <div className="grid gap-3 lg:grid-cols-[0.95fr_1.05fr]">
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  1 · Ideia
+                </label>
+                <Textarea
+                  value={idea}
+                  onChange={(event) => setIdea(event.target.value)}
+                  placeholder="Escreve a ideia da tarefa em linguagem natural..."
+                  rows={3}
+                  className="min-h-[88px] resize-none"
+                  disabled={dispatching || generating}
+                />
+              </div>
 
-          <div className="grid gap-2 sm:grid-cols-2">
-            <div className="space-y-2">
-              <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                Agente
-              </label>
-              <Select value={selectedAgent} onValueChange={setSelectedAgent} disabled={loadingAgents}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder={loadingAgents ? "A carregar..." : "Selecionar agente"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {agents.map((agent) => (
-                    <SelectItem key={agent.key} value={agent.key}>
-                      {agent.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-2">
+                  <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                    Agente
+                  </label>
+                  <Select value={selectedAgent} onValueChange={setSelectedAgent} disabled={loadingAgents}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder={loadingAgents ? "A carregar..." : "Selecionar agente"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {agents.map((agent) => (
+                        <SelectItem key={agent.key} value={agent.key}>
+                          {agent.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                    Secção
+                  </label>
+                  <Select value={selectedSection} onValueChange={(value) => setSelectedSection(value as TaskSectionKey)}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Secção" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TASK_SECTIONS.map((section) => (
+                        <SelectItem key={section.key} value={section.key}>
+                          {section.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={handleGeneratePrompt}
+                disabled={!idea.trim() || generating || dispatching || !selectedAgent}
+                className="w-full"
+              >
+                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
+                2 · Gerar prompt
+              </Button>
             </div>
 
             <div className="space-y-2">
-              <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                Secção
-              </label>
-              <Select value={selectedSection} onValueChange={(value) => setSelectedSection(value as TaskSectionKey)}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Secção" />
-                </SelectTrigger>
-                <SelectContent>
-                  {TASK_SECTIONS.map((section) => (
-                    <SelectItem key={section.key} value={section.key}>
-                      {section.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  3 · Prompt editável
+                </label>
+                <span className="text-[11px] text-muted-foreground">
+                  {prompt.trim() ? `${prompt.trim().split(/\s+/).length} palavras` : "vazio"}
+                </span>
+              </div>
+              <Textarea
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                placeholder="Gera primeiro ou escreve/ajusta o prompt manualmente..."
+                rows={6}
+                className="min-h-[132px] resize-none lg:min-h-[164px]"
+                disabled={dispatching || generating}
+              />
+              <Button type="submit" disabled={!idea.trim() || !prompt.trim() || !selectedAgent || dispatching} className="w-full">
+                {dispatching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                4 · Enviar para agente
+              </Button>
             </div>
-          </div>
-
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={handleGeneratePrompt}
-              disabled={!idea.trim() || generating || dispatching || !selectedAgent}
-              className="w-full sm:w-auto"
-            >
-              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
-              Gerar prompt
-            </Button>
-            <Button type="submit" disabled={!idea.trim() || !prompt.trim() || !selectedAgent || dispatching} className="w-full sm:w-auto">
-              {dispatching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              Criar e dispatch
-            </Button>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                Prompt editável
-              </label>
-              <span className="text-[11px] text-muted-foreground">
-                {prompt.trim() ? `${prompt.trim().split(/\s+/).length} palavras` : "vazio"}
-              </span>
-            </div>
-            <Textarea
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder="Gera primeiro ou escreve/ajusta o prompt manualmente..."
-              rows={8}
-              className="min-h-[180px] resize-none"
-              disabled={dispatching || generating}
-            />
           </div>
         </form>
 
         {status && (
-          <p className="mt-3 rounded-lg border border-status-online/30 bg-status-online/5 px-3 py-2 text-sm text-status-online">
+          <p className="mx-4 mb-4 rounded-lg border border-status-online/30 bg-status-online/5 px-3 py-2 text-sm text-status-online sm:mx-5">
             {status}
           </p>
         )}
 
         {error && (
-          <p className="mt-3 rounded-lg border border-status-offline/30 bg-status-offline/5 px-3 py-2 text-sm text-status-offline">
+          <p className="mx-4 mb-4 rounded-lg border border-status-offline/30 bg-status-offline/5 px-3 py-2 text-sm text-status-offline sm:mx-5">
             {error}
           </p>
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
-        {TASK_SECTIONS.map((section) => {
+      <div className="space-y-3">
+        <div className="flex items-end justify-between px-1">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-muted-foreground">
+              Active board
+            </p>
+            <h3 className="mt-1 font-display text-base font-semibold text-foreground">
+              Trabalho em voo
+            </h3>
+          </div>
+          <p className="font-mono text-xs tabular-nums text-muted-foreground">
+            {String(open).padStart(2, "0")} abertas
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+          {activeSections.map((section) => {
           const items = board?.sections[section.key] ?? [];
           return (
             <section
               key={section.key}
-              className={cn("rounded-2xl border border-border/60 p-4 shadow-sm", sectionBodyTone[section.key])}
+              className={cn("rounded-2xl border border-border/60 p-3 shadow-sm sm:p-4", sectionBodyTone[section.key])}
             >
               <div className={cn("flex items-center justify-between border-b pb-2", sectionTone[section.key])}>
                 <div>
@@ -577,180 +751,48 @@ export const TasksTab = () => {
 
               <div className="mt-3 space-y-2">
                 {items.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-border/50 px-3 py-5 text-center text-xs text-muted-foreground">
+                  <div className="rounded-xl border border-dashed border-border/50 px-3 py-4 text-center text-xs text-muted-foreground">
                     Sem tarefas nesta secção
                   </div>
                 ) : (
-                  items.map((task) => {
-                    const taskKey = getTaskKey(task);
-                    const taskAction = taskActions[taskKey] ?? null;
-                    const isEditing = editingTaskKey === taskKey;
-                    const draftText = editDrafts[taskKey] ?? task.text;
-                    const statusInfo = getTaskStatusCopy(task);
-                    const agentName = getTaskAgent(task);
-                    return (
-                      <article key={taskKey} className="rounded-xl border border-border/60 bg-background/70 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1 space-y-2">
-                            {isEditing ? (
-                              <Textarea
-                                value={draftText}
-                                onChange={(event) =>
-                                  setEditDrafts((current) => ({
-                                    ...current,
-                                    [taskKey]: event.target.value,
-                                  }))
-                                }
-                                rows={3}
-                                className="min-h-[92px] resize-none"
-                                disabled={taskAction === "edit"}
-                              />
-                            ) : (
-                              <div className="space-y-2">
-                                <p className="text-sm font-medium leading-5 text-foreground">{task.text}</p>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span
-                                    className={cn(
-                                      "rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
-                                      statusInfo.tone,
-                                    )}
-                                  >
-                                    {statusInfo.label}
-                                  </span>
-                                  <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                                    {sectionLabelByKey[task.section]}
-                                  </span>
-                                  {agentName && (
-                                    <span
-                                      className={cn(
-                                        "rounded-full border px-2 py-0.5 font-mono text-[10px] lowercase tracking-wide",
-                                        ownerTone[String(agentName)] ?? "border-border text-muted-foreground",
-                                      )}
-                                    >
-                                      {agentName}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                            {!isEditing && task.conclusion && task.section === "completed" && (
-                              <p className="rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-xs text-foreground">
-                                {task.conclusion}
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="flex shrink-0 items-center gap-1">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                              onClick={() => void openTaskDetail(task)}
-                              aria-label={`Abrir detalhe da tarefa ${task.text}`}
-                            >
-                              <ArrowUpRight className="h-4 w-4" />
-                            </Button>
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                                  aria-label={`Mais ações para ${task.text}`}
-                                >
-                                  <MoreHorizontal className="h-4 w-4" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end" className="w-52">
-                                <DropdownMenuItem onClick={() => startEditingTask(task)} disabled={Boolean(taskAction) || isEditing}>
-                                  <Pencil className="mr-2 h-4 w-4" />
-                                  Editar
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => void handleDelete(task)}
-                                  disabled={Boolean(taskAction) || isEditing}
-                                  className="text-status-offline focus:text-status-offline"
-                                >
-                                  {taskAction === "delete" ? (
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                  ) : (
-                                    <Trash2 className="mr-2 h-4 w-4" />
-                                  )}
-                                  Eliminar
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuLabel className="px-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                                  Mover para
-                                </DropdownMenuLabel>
-                                {TASK_SECTIONS.filter((option) => option.key !== task.section).map((option) => (
-                                  <DropdownMenuItem
-                                    key={option.key}
-                                    onClick={() => handleMove(task, option.key)}
-                                    disabled={Boolean(taskAction)}
-                                  >
-                                    {option.label}
-                                  </DropdownMenuItem>
-                                ))}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </div>
-                        </div>
-
-                        {isEditing ? (
-                          <div className="mt-3 flex gap-2">
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              className="h-9 flex-1"
-                              onClick={() => cancelEditingTask(taskKey)}
-                              disabled={taskAction === "edit"}
-                            >
-                              Cancelar
-                            </Button>
-                            <Button
-                              type="button"
-                              className="h-9 flex-1"
-                              onClick={() => handleSaveEdit(task)}
-                              disabled={!draftText.trim() || taskAction === "edit"}
-                            >
-                              {taskAction === "edit" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Guardar"}
-                            </Button>
-                          </div>
-                        ) : (
-                          <div className="mt-3 space-y-2">
-                            <div className="grid gap-1 text-[10px] text-muted-foreground sm:grid-cols-2">
-                              <span className="truncate">ID: {task.taskId || task.id}</span>
-                              <span className="truncate">Sessão: {task.sessionId || task.sessionKey || "—"}</span>
-                            </div>
-
-                            <Select
-                              value={task.section}
-                              onValueChange={(value) => handleMove(task, value as TaskSectionKey)}
-                              disabled={Boolean(taskAction)}
-                            >
-                              <SelectTrigger className="h-9 w-full text-xs">
-                                <SelectValue placeholder="Mover para…" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {TASK_SECTIONS.map((option) => (
-                                  <SelectItem key={option.key} value={option.key}>
-                                    Mover para {option.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        )}
-                      </article>
-                    );
-                  })
+                  items.map((task) => renderTaskCard(task))
                 )}
               </div>
             </section>
           );
         })}
+        </div>
+
+        <Accordion type="single" collapsible className="rounded-2xl border border-border/60 bg-muted/10 px-3 sm:px-4">
+          <AccordionItem value="completed" className="border-0">
+            <AccordionTrigger className="py-3 text-left hover:no-underline">
+              <span className="flex w-full items-center justify-between gap-3 pr-2">
+                <span>
+                  <span className="block text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                    Completed archive
+                  </span>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Recolhido para manter foco no trabalho ativo
+                  </span>
+                </span>
+                <span className="rounded-full border border-border/60 px-2 py-1 font-mono text-xs tabular-nums text-foreground">
+                  {String(completedItems.length).padStart(2, "0")}
+                </span>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent className="pb-3">
+              <div className="space-y-2">
+                {completedItems.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-border/50 px-3 py-4 text-center text-xs text-muted-foreground">
+                    Sem tarefas concluídas
+                  </div>
+                ) : (
+                  completedItems.map((task) => renderTaskCard(task, "completed"))
+                )}
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
       </div>
 
       <Sheet open={detailOpen} onOpenChange={setDetailOpen}>
@@ -804,7 +846,35 @@ export const TasksTab = () => {
                     </span>
                   </div>
 
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div className="mt-4 rounded-2xl border border-primary/20 bg-primary/5 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-primary">
+                          Resposta final
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Resultado operacional mais recente desta tarefa
+                        </p>
+                      </div>
+                      <span className="rounded-full border border-primary/25 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary">
+                        {detailFinalResponse ? "disponível" : "sem resposta"}
+                      </span>
+                    </div>
+                    <div className="mt-3 max-h-[42vh] overflow-y-auto rounded-xl border border-border/50 bg-background/70 px-3 py-3 text-sm leading-6 text-foreground">
+                      {detailFinalResponse || "Sem resposta final disponível para esta execução."}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 border-t border-border/50 pt-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                      Edição e follow-up
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Mantém a instrução, ajusta o prompt e envia nova continuação quando necessário.
+                    </p>
+                  </div>
+
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <div className="space-y-2">
                       <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                         Instrução atual
@@ -829,7 +899,7 @@ export const TasksTab = () => {
                     </div>
                   </div>
 
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                     <div className="space-y-2">
                       <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                         Agente
@@ -847,23 +917,15 @@ export const TasksTab = () => {
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="space-y-2">
-                      <label className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                        Resposta final
-                      </label>
-                      <div className="rounded-xl border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                        {detail.session?.finalResult || detail.currentRun?.conclusion || "Sem resposta final disponível"}
-                      </div>
-                    </div>
                   </div>
 
-                  <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                  <div className="mt-4 grid gap-2 sm:grid-cols-4">
                     <Button
                       type="button"
                       variant="secondary"
                       onClick={() => void handleGenerateDetailPrompt()}
                       disabled={!detailInstruction.trim() || !detailAgent.trim() || detailBusy !== null}
-                      className="w-full sm:w-auto"
+                      className="w-full"
                     >
                       {detailBusy === "prompt" ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
                       Gerar prompt
@@ -873,7 +935,7 @@ export const TasksTab = () => {
                       variant="secondary"
                       onClick={() => void handleSaveDetailText()}
                       disabled={!detailInstruction.trim() || detailBusy !== null}
-                      className="w-full sm:w-auto"
+                      className="w-full"
                     >
                       {detailBusy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}
                       Guardar texto
@@ -883,7 +945,7 @@ export const TasksTab = () => {
                       variant="secondary"
                       onClick={() => void handleReopenDetail()}
                       disabled={!detailInstruction.trim() || detailBusy !== null}
-                      className="w-full sm:w-auto"
+                      className="w-full"
                     >
                       {detailBusy === "reopen" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
                       Reabrir
@@ -892,7 +954,7 @@ export const TasksTab = () => {
                       type="button"
                       onClick={() => void handleFollowUpDetail()}
                       disabled={!detailInstruction.trim() || !detailPrompt.trim() || !detailAgent.trim() || detailBusy !== null}
-                      className="w-full sm:w-auto"
+                      className="w-full"
                     >
                       {detailBusy === "dispatch" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUpRight className="h-4 w-4" />}
                       Follow-up e dispatch

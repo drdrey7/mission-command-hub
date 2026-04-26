@@ -25,6 +25,7 @@ const {
 const {
   getNotificationsFeed,
   markNotificationsRead,
+  getAttentionSignals,
 } = require('./notifications-store');
 const {
   peekConversation,
@@ -1295,6 +1296,40 @@ app.get('/api/notifications', async (req, res) => {
       totalCount: 0,
       unreadCount: 0,
       items: [],
+    });
+  }
+});
+
+app.get('/api/attention-signals', async (req, res) => {
+  try {
+    const limit = Number(req.query?.limit) || 5;
+    const feed = await getAttentionSignals({ fetchImpl: fetch, token: getToken(), limit });
+    res.json({
+      ok: true,
+      ...feed,
+    });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      collectedAt: new Date().toISOString(),
+      source: 'openclaw-attention',
+      totalCount: 0,
+      items: [{
+        id: `attention:error:${Date.now()}`,
+        title: 'Sinais indisponíveis',
+        body: String(e?.message || e),
+        level: 'critical',
+        category: 'system',
+        time: 'agora',
+        timestamp: new Date().toISOString(),
+        source: 'sistema',
+        kind: 'attention_error',
+        sessionKey: null,
+        sessionId: null,
+        runId: null,
+      }],
+      rules: [],
+      sources: null,
     });
   }
 });

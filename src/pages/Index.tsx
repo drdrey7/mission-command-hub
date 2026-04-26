@@ -23,7 +23,7 @@ import { VpsPanel } from "@/components/mission/VpsPanel";
 import { Fail2banPanel } from "@/components/mission/Fail2banPanel";
 import { AuditTrail } from "@/components/mission/AuditTrail";
 import { Button } from "@/components/ui/button";
-import { getNotifications, getOpenClawState, type Notification } from "@/services/api";
+import { getAttentionSignals, getOpenClawState, type AttentionSignal } from "@/services/api";
 import type { Agent } from "@/data/mockData";
 import { cn } from "@/lib/utils";
 
@@ -63,7 +63,7 @@ const ShellTitle = ({ area }: { area: Area }) => {
 };
 
 const AttentionPanel = () => {
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [signals, setSignals] = useState<AttentionSignal[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,10 +71,10 @@ const AttentionPanel = () => {
     let cancelled = false;
     const load = async () => {
       try {
-        const feed = await getNotifications();
+        const feed = await getAttentionSignals();
         if (cancelled) return;
-        setNotifications((feed.items ?? []).filter((item) => !item.read && item.level !== "info").slice(0, 3));
-        setError(feed.errors?.[0] ?? null);
+        setSignals((feed.items ?? []).slice(0, 5));
+        setError(null);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Falha ao carregar alertas");
       } finally {
@@ -98,8 +98,8 @@ const AttentionPanel = () => {
             <Bell className="h-4 w-4 text-status-warning" />
           </div>
           <div>
-            <h2 className="font-display text-xs font-semibold uppercase tracking-[0.2em] text-foreground">Sinais</h2>
-            <p className="text-[11px] text-muted-foreground">{loading ? "radar a varrer..." : `${notifications.length} requerem atencao`}</p>
+            <h2 className="font-display text-xs font-semibold uppercase tracking-[0.2em] text-foreground">Sinais de atenção</h2>
+            <p className="text-[11px] text-muted-foreground">{loading ? "radar a varrer..." : `${signals.length} precisam de ti`}</p>
           </div>
         </div>
       </div>
@@ -108,14 +108,17 @@ const AttentionPanel = () => {
         <div className="mt-4 rounded-xl border border-status-warning/30 bg-status-warning/5 px-3 py-2 text-xs text-status-warning">
           {error}
         </div>
-      ) : notifications.length > 0 ? (
+      ) : signals.length > 0 ? (
         <div className="mt-4 space-y-2">
-          {notifications.map((item) => (
+          {signals.map((item) => (
             <article key={item.id} className="rounded-xl border border-border/60 bg-surface-2/40 px-3 py-2">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-foreground">{item.title}</p>
                   <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{item.body}</p>
+                  <p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {item.time} · {item.source || "sistema"}
+                  </p>
                 </div>
                 <span className={cn(
                   "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
@@ -132,7 +135,7 @@ const AttentionPanel = () => {
       ) : (
         <div className="mt-4 rounded-2xl border border-status-online/25 bg-status-online/5 px-4 py-4">
           <p className="text-sm font-medium text-foreground">Cockpit limpo.</p>
-          <p className="mt-1 text-xs text-muted-foreground">Sem alertas criticos por ler neste momento.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Nenhum agente está à espera de decisão tua agora.</p>
         </div>
       )}
     </section>
