@@ -1,117 +1,113 @@
-# Openclaw Mission Control
+# Mission Command Hub
 
-Premium aviation-style Mission Control dashboard for the openclaw AI agents
-(**comandante**, **cyber**, **flow**, **ledger**).
+Frontend dashboard for your OpenClaw operations stack.
 
-Built with **React 18 + TypeScript + Vite + Tailwind CSS**. Ships with a mock
-data layer that you swap for your VPS API in **one place** (`src/services/api.ts`).
+This repository is the **UI layer** for your Mission Control setup. It is built with **React 18 + TypeScript + Vite + Tailwind CSS** and expects a backend that exposes the API used in `src/services/api.ts`.
 
----
+## What this repo is
 
-## 1. Run locally
+- Static frontend app
+- Mobile-friendly operator dashboard
+- Connects to a real backend through `VITE_OPENCLAW_API_URL`
+- Can also run in mock/demo mode for UI work
+
+## What this repo is not
+
+- Not the OpenClaw core
+- Not the OpenClaw gateway
+- Not the full backend by itself
+
+## Run locally
 
 ```bash
 npm install
-npm run dev          # http://localhost:5173
-npm run build        # production bundle in dist/
+npm run dev
 ```
 
-## 2. Deploy to your VPS
+Vite runs on:
 
-The whole app is static. After `npm run build`, copy `dist/` to any web server.
-
-```nginx
-server {
-  listen 80;
-  server_name mission.openclaw.io;
-  root /var/www/openclaw-mc/dist;
-  index index.html;
-  location / { try_files $uri /index.html; }
-}
+```text
+http://localhost:8080
 ```
 
-## 3. Connect your real backend
+## Build for deployment
 
-Create `.env` at the project root:
+```bash
+npm run build
+```
+
+The production bundle is generated in `dist/` and can be served by any static web server.
+
+## Environment variables
+
+Create a `.env` file at the project root.
 
 ```env
-VITE_OPENCLAW_API_URL=https://api.openclaw.io
-VITE_OPENCLAW_TOKEN=your-bearer-token   # optional; or set localStorage.openclaw_token
+VITE_OPENCLAW_API_URL=http://localhost:8780
+VITE_OPENCLAW_TOKEN=
+VITE_USE_MOCK=false
 ```
 
-Rebuild — `USE_MOCK` flips to `false` automatically when the URL is set.
+### Variable meaning
 
-### Endpoints expected
+- `VITE_OPENCLAW_API_URL`: base URL of the backend used by the UI
+- `VITE_OPENCLAW_TOKEN`: optional bearer token
+- `VITE_USE_MOCK`: force mock mode for frontend-only work
 
-| Method | Path | Body | Returns |
-|---|---|---|---|
-| GET  | `/agents` | — | `Agent[]` |
-| GET  | `/tasks` | — | `Task[]` |
-| GET  | `/missions` | — | `Mission[]` |
-| POST | `/missions` | `{ codename, objective, lead, squad, priority, eta }` | `Mission` |
-| POST | `/missions/:id/abort` | — | `{ ok }` |
-| GET  | `/vps/nodes` | — | `VpsNode[]` |
-| POST | `/vps/nodes/:id/action` | `{ action: "restart"\|"snapshot"\|"scale" }` | `{ ok }` |
-| GET  | `/audit?limit=50` | — | `ActivityEvent[]` |
-| GET  | `/notifications` | — | `Notification[]` |
-| POST | `/system/kill-switch` | `{ reason }` | `{ ok }` |
-| POST | `/system/resume` | — | `{ ok }` |
-| POST | `/chat/:agent` | `{ messages: [{role, content}] }` | `{ reply }` |
+## Real backend routes used by the frontend
 
-Types in `src/data/mockData.ts` and `src/services/api.ts`.
-Auth: `Authorization: Bearer <token>` from env or `localStorage.openclaw_token`.
+This UI currently talks to routes such as:
 
-### Task execution store
+- `GET /api/state`
+- `GET /api/tasks`
+- `POST /api/tasks`
+- `PATCH /api/tasks`
+- `DELETE /api/tasks`
+- `POST /api/tasks/generate-prompt`
+- `POST /api/tasks/dispatch`
+- `GET /api/tasks/:taskId/details`
+- `POST /api/tasks/:taskId/reopen`
+- `POST /api/tasks/:taskId/follow-up`
+- `GET /api/missions`
+- `POST /api/missions`
+- `POST /api/missions/:id/abort`
+- `GET /api/vps/snapshot`
+- `POST /api/vps/nodes/:id/action`
+- `GET /api/notifications`
+- `POST /api/notifications/read`
+- `GET /api/attention-signals`
+- `GET /api/chat/:agent`
+- `POST /api/chat/:agent`
+- `POST /api/chat/:agent/transcribe`
+- `GET /api/fail2ban/stats`
+- `GET /api/fail2ban/jails`
+- `GET /api/fail2ban/banned`
+- `GET /api/fail2ban/seen`
 
-The task list itself stays in `TASKS.md`, but execution history is persisted separately in:
+For the exact request and response shapes, use:
 
-`/root/.openclaw/projects/mission-control/data/task-executions.json`
+- `src/services/api.ts`
+- `src/data/mockData.ts`
 
-That store keeps per-`taskId` execution runs, session keys, session ids, follow-up events, and timestamps so completed tasks can be reopened without losing their history.
+## Task persistence
 
-## 4. Features
+The UI does not own the task truth by itself.
 
-- 🛩️ Agent cards with orbiting plane + live flight timer
-- 💬 Agent chat (slide-over) → `POST /chat/:agent`
-- 🚀 Mission Builder dialog → `POST /missions`
-- 🛰️ VPS panel with restart / snapshot / scale
-- 🧠 Memory tab
-- 📜 Audit trail with CSV export
-- 🔔 Notifications popover
-- 🛑 Kill switch
-- 🌗 Light + dark theme
+In your current setup, the task board is backed by the Mission Control backend, which can in turn read from `TASKS.md` and related execution stores.
 
-## 5. File map
+## Project structure
 
-```
+```text
 src/
-├── pages/Index.tsx
-├── services/api.ts              # 🔌 SWAP HERE
+├── components/
 ├── data/mockData.ts
-└── components/
-    ├── theme/                   # ThemeProvider + toggle
-    └── mission/
-        ├── Hero.tsx
-        ├── AgentCard.tsx
-        ├── AgentBadge.tsx       # icon + orbit + FlightTimer
-        ├── ActiveTasksPanel.tsx
-        ├── SystemStatusPanel.tsx
-        ├── RecentActivityPanel.tsx
-        ├── OperationalTabs.tsx  # Missions / Memory / VPS / Audit
-        ├── MissionBuilder.tsx
-        ├── AuditTrail.tsx
-        ├── VpsActions.tsx
-        ├── AgentChat.tsx
-        ├── NotificationsBell.tsx
-        ├── KillSwitch.tsx
-        └── CommandFooter.tsx
+├── pages/Index.tsx
+├── services/api.ts
+└── ...
 ```
 
-## 6. Suggested backend stack
+## Notes
 
-- **FastAPI** or **Hono** for the REST surface
-- **Postgres** for missions / audit / memory persistence
-- **Redis** for live agent status pub/sub
-- **LiteLLM** / OpenAI / Anthropic for `/chat/:agent`
-
-Pousem com excelência. ✈️
+- Keep backend contract changes in sync with `src/services/api.ts`
+- Keep documentation aligned with the real Vite port and real API routes
+- Do not treat this repo as the OpenClaw backend
