@@ -1,7 +1,8 @@
 {
-  "name": "vite_react_shadcn_ts",
+  "name": "mission-command-hub",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Frontend dashboard for OpenClaw Mission Control and related backend APIs",
   "type": "module",
   "scripts": {
     "dev": "vite",
