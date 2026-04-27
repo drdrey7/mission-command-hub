@@ -9,7 +9,7 @@ This repository is the **UI layer** for your Mission Control setup. It is built 
 - Static frontend app
 - Mobile-friendly operator dashboard
 - Connects to a real backend through `VITE_OPENCLAW_API_URL`
-- Can also run in mock/demo mode for UI work
+- Includes mock data for UI development
 
 ## What this repo is not
 
@@ -45,14 +45,18 @@ Create a `.env` file at the project root.
 ```env
 VITE_OPENCLAW_API_URL=http://localhost:8780
 VITE_OPENCLAW_TOKEN=
-VITE_USE_MOCK=false
 ```
 
 ### Variable meaning
 
 - `VITE_OPENCLAW_API_URL`: base URL of the backend used by the UI
 - `VITE_OPENCLAW_TOKEN`: optional bearer token
-- `VITE_USE_MOCK`: force mock mode for frontend-only work
+
+### Mock mode
+
+Mock data exists in `src/data/mockData.ts`.
+
+At the moment, mock/live switching is controlled in `src/services/api.ts`, so keep that file aligned with the way you want to run the frontend.
 
 ## Real backend routes used by the frontend
 
